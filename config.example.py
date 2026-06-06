@@ -5,6 +5,8 @@ PASSWORD = "your-login-password"
 CAPSOLVER_API_KEY = ""
 CAPTCHA_URL = "https://www.usvisaappt.com/visaapplicantui"
 CAPTCHA_KEY = ""
+ANCHOR_BASE_64 = ""
+RELOAD_BASE_64 = ""
 
 # These are updated automatically after a successful login. AUTHORIZATION_TOKEN
 # is enough to skip login; REFRESH_TOKEN is persisted for future refresh support.

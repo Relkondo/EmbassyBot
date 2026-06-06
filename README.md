@@ -25,6 +25,7 @@ Fill `config.py` before running. The most important fields are:
 
 - `USERNAME`, `PASSWORD`
 - `CAPSOLVER_API_KEY`, `CAPTCHA_URL`, `CAPTCHA_KEY`
+- `ANCHOR_BASE_64`, `RELOAD_BASE_64` if CapSolver needs anchor/reload payloads
 - `AUTHORIZATION_TOKEN`, `REFRESH_TOKEN`
 - `APPLICANT_ID`, `APPLICATION_ID`, `POST_USER_ID`
 - `FROM_DATE`, `TO_DATE`, `CURRENT_APPOINTMENT_DATE`
