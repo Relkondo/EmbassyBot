@@ -60,6 +60,8 @@ def build_runtime() -> tuple[date, SlotRequest, VisaAppointmentClient, TelegramN
             authorization,
             refresh,
         ),
+        anchor=config.ANCHOR_BASE_64,
+        reload=config.RELOAD_BASE_64,
     )
     notifier = TelegramNotifier(
         bot_token=config.TELEGRAM_BOT_TOKEN,

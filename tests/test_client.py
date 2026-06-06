@@ -26,6 +26,10 @@ class FakeSession:
         self.requests.append({"url": url, **kwargs})
         return self.responses.pop(0)
 
+    def get(self, url, **kwargs):
+        self.requests.append({"url": url, **kwargs})
+        return self.responses.pop(0)
+
 
 class TestVisaAppointmentClient(VisaAppointmentClient):
     def __init__(self, *args, **kwargs) -> None:
@@ -75,6 +79,7 @@ class ClientTests(unittest.TestCase):
         session = FakeSession(
             [
                 FakeResponse(status_code=401),
+                FakeResponse(),
                 FakeResponse(
                     headers={
                         "Authorization": "Bearer fresh",
@@ -100,12 +105,14 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(client.captcha_requests, 1)
         self.assertEqual(saved_tokens, [("Bearer fresh", "refresh fresh")])
-        self.assertEqual(session.requests[1]["json"]["captchaToken"], "captcha-1")
+        self.assertIn("/visaapplicantui", session.requests[1]["url"])
+        self.assertEqual(session.requests[2]["json"]["captchaToken"], "captcha-1")
         self.assertEqual(session.requests[-1]["headers"]["Authorization"], "Bearer fresh")
 
     def test_missing_authorization_token_logs_in_before_slots(self) -> None:
         session = FakeSession(
             [
+                FakeResponse(),
                 FakeResponse(
                     headers={
                         "Authorization": "Bearer fresh",
@@ -128,10 +135,11 @@ class ClientTests(unittest.TestCase):
         client.get_slot_dates(slot_request())
 
         self.assertEqual(client.captcha_requests, 1)
-        self.assertIn("/identity/user/login", session.requests[0]["url"])
-        self.assertEqual(session.requests[0]["json"]["captchaToken"], "captcha-1")
-        self.assertIn("/getSlotDates", session.requests[1]["url"])
-        self.assertEqual(session.requests[1]["headers"]["Authorization"], "Bearer fresh")
+        self.assertIn("/visaapplicantui", session.requests[0]["url"])
+        self.assertIn("/identity/user/login", session.requests[1]["url"])
+        self.assertEqual(session.requests[1]["json"]["captchaToken"], "captcha-1")
+        self.assertIn("/getSlotDates", session.requests[2]["url"])
+        self.assertEqual(session.requests[2]["headers"]["Authorization"], "Bearer fresh")
 
 
 if __name__ == "__main__":

@@ -12,25 +12,31 @@ from embassy_bot.crypto import build_login_authorization
 
 
 LOGGER = logging.getLogger(__name__)
+MAX_RESPONSE_SNIPPET_LENGTH = 1000
+SENSITIVE_RESPONSE_HEADERS = {"authorization", "refreshtoken", "set-cookie"}
 
 LOGIN_URL = "https://www.usvisaappt.com/identity/user/login"
+APP_URL = "https://www.usvisaappt.com/visaapplicantui/"
 SLOT_URL = "https://www.usvisaappt.com/visaadministrationapi/v1/modifyslot/getSlotDates"
+ORIGIN = "https://www.usvisaappt.com"
 
 USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
-
 LOGIN_HEADERS = {
     "Access-Control-Max-Age": "1000",
-    "sec-ch-ua-platform": '"macOS"',
-    "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
     "sec-ch-ua-mobile": "?0",
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Origin": "*",
     "User-Agent": USER_AGENT,
     "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
     "Content-Type": "application/json",
+    "Origin": ORIGIN,
+    "Referer": APP_URL,
     "Access-Control-Allow-Headers": (
         "Origin, Content-Type, X-Auth-Token, content-type,-CSRF-Token, Authorization"
     ),
@@ -40,8 +46,16 @@ LOGIN_HEADERS = {
     "host": "www.usvisaappt.com",
 }
 
+APP_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": ORIGIN,
+}
+
 SLOT_HEADERS = {
     "User-Agent": USER_AGENT,
+    "Accept-Language": "en-US,en;q=0.9",
     "Content-Type": "application/json",
 }
 
@@ -83,6 +97,8 @@ class VisaAppointmentClient:
         refresh_token: str | None = None,
         on_tokens_updated: Callable[[str, str | None], None] | None = None,
         session: requests.Session | None = None,
+        anchor: str | None = None,
+        reload: str | None = None,
     ) -> None:
         self.username = username
         self.password = password
@@ -95,11 +111,14 @@ class VisaAppointmentClient:
         self.authorization_token = authorization_token or None
         self.refresh_token = refresh_token or None
         self.on_tokens_updated = on_tokens_updated
+        self.anchor = anchor
+        self.reload = reload
 
     def has_authorization_token(self) -> bool:
         return bool(self.authorization_token)
 
     def login(self) -> None:
+        self.warm_up_login_session()
         self.captcha_token = self.get_captcha_token()
         if not self.captcha_token:
             raise ValueError("Failed to get CAPTCHA token")
@@ -114,6 +133,8 @@ class VisaAppointmentClient:
             json=body,
             timeout=self.timeout_seconds,
         )
+        if response.status_code >= 400:
+            self.log_login_failure(response)
         response.raise_for_status()
 
         authorization = response.headers.get("Authorization")
@@ -126,20 +147,46 @@ class VisaAppointmentClient:
         if self.on_tokens_updated:
             self.on_tokens_updated(self.authorization_token, self.refresh_token)
 
+    def warm_up_login_session(self) -> None:
+        response = self.session.get(
+            APP_URL,
+            headers=APP_HEADERS,
+            timeout=self.timeout_seconds,
+        )
+        response.raise_for_status()
+        LOGGER.info("Warmed up login session from app page")
+
+    def log_login_failure(self, response: requests.Response) -> None:
+        safe_headers = {
+            name: ("<redacted>" if name.lower() in SENSITIVE_RESPONSE_HEADERS else value)
+            for name, value in response.headers.items()
+        }
+        cookie_names = [cookie.name for cookie in self.session.cookies]
+        snippet = response.text[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
+        LOGGER.error("LOGIN failed with status %s", response.status_code)
+        LOGGER.error("LOGIN response headers: %s", safe_headers)
+        LOGGER.error("LOGIN session cookie names: %s", cookie_names)
+        LOGGER.error("LOGIN response body snippet: %s", snippet)
+
     def get_captcha_token(self) -> str:
         if not (self.capsolver_api_key and self.captcha_url and self.captcha_key):
             raise ValueError("CapSolver API key, CAPTCHA URL, and CAPTCHA key must be configured")
-
         capsolver.api_key = self.capsolver_api_key
-        result = capsolver.solve({
+        task = {
             "type": "ReCaptchaV2TaskProxyLess",
             "websiteURL": self.captcha_url,
             "websiteKey": self.captcha_key,
-        })
-        if isinstance(result, str):
-            return result
+        }
+        if self.anchor:
+            task["anchor"] = self.anchor
+        if self.reload:
+            task["reload"] = self.reload
+
+        result = capsolver.solve(task)
         if isinstance(result, dict):
             return result.get("gRecaptchaResponse") or result.get("token") or ""
+        else:
+            LOGGER.error(result)
         return ""
 
     def get_slot_dates(self, request: SlotRequest) -> Any:
@@ -154,8 +201,20 @@ class VisaAppointmentClient:
             self.login()
             response = self._post_slots(request)
 
+        if response.status_code >= 400:
+            self.log_slot_failure(response)
         response.raise_for_status()
         return response.json()
+
+    def log_slot_failure(self, response: requests.Response) -> None:
+        safe_headers = {
+            name: ("<redacted>" if name.lower() in SENSITIVE_RESPONSE_HEADERS else value)
+            for name, value in response.headers.items()
+        }
+        snippet = response.text[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
+        LOGGER.error("SLOTS failed with status %s", response.status_code)
+        LOGGER.error("SLOTS response headers: %s", safe_headers)
+        LOGGER.error("SLOTS response body snippet: %s", snippet)
 
     def _post_slots(self, request: SlotRequest) -> requests.Response:
         headers = {**SLOT_HEADERS, "Authorization": self.authorization_token or ""}
