@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+import capsolver
+import config
 
 from embassy_bot.crypto import build_login_authorization
 
@@ -78,12 +80,12 @@ class VisaAppointmentClient:
         timeout_seconds: int = 30,
         authorization_token: str | None = None,
         refresh_token: str | None = None,
-        on_tokens_updated: Callable[[str, str | None], None] | None = None,
+        on_tokens_updated: Callable[[str, str, str | None], None] | None = None,
         session: requests.Session | None = None,
     ) -> None:
         self.username = username
         self.password = password
-        self.captcha_token = captcha_token
+        self.captcha_token = captcha_token or None
         self.timeout_seconds = timeout_seconds
         self.session = session or requests.Session()
         self.authorization_token = authorization_token or None
@@ -91,8 +93,9 @@ class VisaAppointmentClient:
         self.on_tokens_updated = on_tokens_updated
 
     def login(self) -> None:
+        self.captcha_token = self.get_captcha_token()
         if not self.captcha_token:
-            raise ValueError("CAPTCHA_TOKEN must be configured before login")
+            raise ValueError("Failed to get CAPTCHA token")
 
         body = {
             "authorization": build_login_authorization(self.username, self.password),
@@ -114,7 +117,15 @@ class VisaAppointmentClient:
         self.refresh_token = response.headers.get("Refreshtoken")
         LOGGER.info("Logged in and stored authorization token")
         if self.on_tokens_updated:
-            self.on_tokens_updated(self.authorization_token, self.refresh_token)
+            self.on_tokens_updated(self.authorization_token, self.captcha_token, self.refresh_token)
+
+    def get_captcha_token(self) -> str:
+        capsolver.api_key = config.CAPSOLVER_API_KEY
+        return capsolver.solve({
+                    "type": "ReCaptchaV2TaskProxyLess",
+                    "websiteURL": config.CAPTCHA_URL,
+                    "websiteKey": config.CAPTCHA_KEY,
+                })
 
     def get_slot_dates(self, request: SlotRequest) -> Any:
         if not self.authorization_token:
