@@ -3,8 +3,8 @@
 Python bot for polling US visa appointment slots after logging in with the
 site's browser-compatible encrypted authorization header.
 
-The bot expects a manually supplied `CAPTCHA_TOKEN` in `config.py`. It does not
-solve or bypass CAPTCHA challenges itself.
+On each login attempt, the bot requests a fresh CAPTCHA token through CapSolver.
+It does not persist CAPTCHA tokens.
 
 ## Local Setup
 
@@ -23,7 +23,8 @@ python -m embassy_bot.main --once
 
 Fill `config.py` before running. The most important fields are:
 
-- `USERNAME`, `PASSWORD`, `CAPTCHA_TOKEN`
+- `USERNAME`, `PASSWORD`
+- `CAPSOLVER_API_KEY`, `CAPTCHA_URL`, `CAPTCHA_KEY`
 - `AUTHORIZATION_TOKEN`, `REFRESH_TOKEN`
 - `APPLICANT_ID`, `APPLICATION_ID`, `POST_USER_ID`
 - `FROM_DATE`, `TO_DATE`, `CURRENT_APPOINTMENT_DATE`
@@ -33,8 +34,10 @@ Fill `config.py` before running. The most important fields are:
 before that value triggers a Telegram notification.
 
 If `AUTHORIZATION_TOKEN` is set, the bot tries the slot request first and skips
-login. If that request returns `401` or `403`, it logs in once and rewrites
-`AUTHORIZATION_TOKEN` and `REFRESH_TOKEN` in `config.py`.
+login. If the token is missing, or if the slot request returns `401` or `403`,
+it logs in once and rewrites `AUTHORIZATION_TOKEN` and `REFRESH_TOKEN` in
+`config.py`. `REFRESH_TOKEN` is persisted for future refresh-token support, but
+the current slot request does not use it.
 
 ## EC2 / systemd
 

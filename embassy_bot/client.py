@@ -5,9 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import requests
 import capsolver
-import config
+import requests
 
 from embassy_bot.crypto import build_login_authorization
 
@@ -76,21 +75,29 @@ class VisaAppointmentClient:
         self,
         username: str,
         password: str,
-        captcha_token: str,
+        capsolver_api_key: str,
+        captcha_url: str,
+        captcha_key: str,
         timeout_seconds: int = 30,
         authorization_token: str | None = None,
         refresh_token: str | None = None,
-        on_tokens_updated: Callable[[str, str, str | None], None] | None = None,
+        on_tokens_updated: Callable[[str, str | None], None] | None = None,
         session: requests.Session | None = None,
     ) -> None:
         self.username = username
         self.password = password
-        self.captcha_token = captcha_token or None
+        self.capsolver_api_key = capsolver_api_key
+        self.captcha_url = captcha_url
+        self.captcha_key = captcha_key
+        self.captcha_token: str | None = None
         self.timeout_seconds = timeout_seconds
         self.session = session or requests.Session()
         self.authorization_token = authorization_token or None
         self.refresh_token = refresh_token or None
         self.on_tokens_updated = on_tokens_updated
+
+    def has_authorization_token(self) -> bool:
+        return bool(self.authorization_token)
 
     def login(self) -> None:
         self.captcha_token = self.get_captcha_token()
@@ -117,18 +124,26 @@ class VisaAppointmentClient:
         self.refresh_token = response.headers.get("Refreshtoken")
         LOGGER.info("Logged in and stored authorization token")
         if self.on_tokens_updated:
-            self.on_tokens_updated(self.authorization_token, self.captcha_token, self.refresh_token)
+            self.on_tokens_updated(self.authorization_token, self.refresh_token)
 
     def get_captcha_token(self) -> str:
-        capsolver.api_key = config.CAPSOLVER_API_KEY
-        return capsolver.solve({
-                    "type": "ReCaptchaV2TaskProxyLess",
-                    "websiteURL": config.CAPTCHA_URL,
-                    "websiteKey": config.CAPTCHA_KEY,
-                })
+        if not (self.capsolver_api_key and self.captcha_url and self.captcha_key):
+            raise ValueError("CapSolver API key, CAPTCHA URL, and CAPTCHA key must be configured")
+
+        capsolver.api_key = self.capsolver_api_key
+        result = capsolver.solve({
+            "type": "ReCaptchaV2TaskProxyLess",
+            "websiteURL": self.captcha_url,
+            "websiteKey": self.captcha_key,
+        })
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            return result.get("gRecaptchaResponse") or result.get("token") or ""
+        return ""
 
     def get_slot_dates(self, request: SlotRequest) -> Any:
-        if not self.authorization_token:
+        if not self.has_authorization_token():
             self.login()
         else:
             LOGGER.info("Using configured authorization token for slot request")

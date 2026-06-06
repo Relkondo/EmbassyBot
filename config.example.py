@@ -1,12 +1,13 @@
 USERNAME = "your-login-email"
 PASSWORD = "your-login-password"
 
-# Captcha solving is intentionally external to this bot. Paste a fresh token here
-# when the site requires one for login.
-CAPTCHA_TOKEN = "captcha-token-from-browser-or-external-flow"
+# A fresh CAPTCHA token is requested through CapSolver on each login attempt.
+CAPSOLVER_API_KEY = ""
+CAPTCHA_URL = "https://www.usvisaappt.com/visaapplicantui"
+CAPTCHA_KEY = ""
 
-# These are updated automatically after a successful login. Leave them empty on
-# first run, or paste values from a previous run to skip login during one-shot tests.
+# These are updated automatically after a successful login. AUTHORIZATION_TOKEN
+# is enough to skip login; REFRESH_TOKEN is persisted for future refresh support.
 AUTHORIZATION_TOKEN = ""
 REFRESH_TOKEN = ""
 

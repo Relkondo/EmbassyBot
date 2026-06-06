@@ -49,7 +49,9 @@ def build_runtime() -> tuple[date, SlotRequest, VisaAppointmentClient, TelegramN
     client = VisaAppointmentClient(
         username=config.USERNAME,
         password=config.PASSWORD,
-        captcha_token=config.CAPTCHA_TOKEN,
+        capsolver_api_key=config.CAPSOLVER_API_KEY,
+        captcha_url=config.CAPTCHA_URL,
+        captcha_key=config.CAPTCHA_KEY,
         timeout_seconds=config.REQUEST_TIMEOUT_SECONDS,
         authorization_token=getattr(config, "AUTHORIZATION_TOKEN", ""),
         refresh_token=getattr(config, "REFRESH_TOKEN", ""),
