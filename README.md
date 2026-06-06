@@ -4,7 +4,6 @@ Python bot for polling US visa appointment slots after logging in with the
 site's browser-compatible encrypted authorization header.
 
 On each login attempt, the bot requests a fresh CAPTCHA token through CapSolver.
-It does not persist CAPTCHA tokens.
 
 ## Local Setup
 
