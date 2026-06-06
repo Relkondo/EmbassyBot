@@ -1,0 +1,19 @@
+[Unit]
+Description=EmbassyBot visa appointment polling service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/EmbassyBot
+ExecStart=/opt/EmbassyBot/.venv/bin/python -m embassy_bot.main
+Restart=always
+RestartSec=15
+User=embassybot
+Group=embassybot
+
+# Keep secrets in /opt/EmbassyBot/config.py, which is intentionally ignored by git.
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
