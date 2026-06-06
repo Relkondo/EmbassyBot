@@ -9,6 +9,7 @@ from threading import Event
 
 import config
 from embassy_bot.client import SlotRequest, VisaAppointmentClient
+from embassy_bot.config_store import persist_tokens_to_config
 from embassy_bot.notifier import TelegramNotifier, format_slot_message
 from embassy_bot.slots import find_available_dates
 
@@ -50,6 +51,13 @@ def build_runtime() -> tuple[date, SlotRequest, VisaAppointmentClient, TelegramN
         password=config.PASSWORD,
         captcha_token=config.CAPTCHA_TOKEN,
         timeout_seconds=config.REQUEST_TIMEOUT_SECONDS,
+        authorization_token=getattr(config, "AUTHORIZATION_TOKEN", ""),
+        refresh_token=getattr(config, "REFRESH_TOKEN", ""),
+        on_tokens_updated=lambda authorization, refresh: persist_tokens_to_config(
+            config.__file__,
+            authorization,
+            refresh,
+        ),
     )
     notifier = TelegramNotifier(
         bot_token=config.TELEGRAM_BOT_TOKEN,
@@ -82,7 +90,6 @@ def poll_once(
 def run_once() -> None:
     configure_logging()
     before_date, slot_request, client, notifier = build_runtime()
-    client.login()
     poll_once(client, slot_request, before_date, notifier, set())
 
 
@@ -95,7 +102,6 @@ def run_forever() -> None:
     signal.signal(signal.SIGTERM, _request_stop)
 
     LOGGER.info("Starting polling every %s seconds", config.POLL_INTERVAL_SECONDS)
-    client.login()
 
     while not STOP_EVENT.is_set():
         try:

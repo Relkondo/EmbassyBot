@@ -5,6 +5,11 @@ PASSWORD = "your-login-password"
 # when the site requires one for login.
 CAPTCHA_TOKEN = "captcha-token-from-browser-or-external-flow"
 
+# These are updated automatically after a successful login. Leave them empty on
+# first run, or paste values from a previous run to skip login during one-shot tests.
+AUTHORIZATION_TOKEN = ""
+REFRESH_TOKEN = ""
+
 APPLICANT_ID = "9X2HLM8IYPUE"
 APPLICATION_ID = "9382-a643-1107-5c04"
 POST_USER_ID = 481

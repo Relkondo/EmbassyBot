@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -75,6 +76,9 @@ class VisaAppointmentClient:
         password: str,
         captcha_token: str,
         timeout_seconds: int = 30,
+        authorization_token: str | None = None,
+        refresh_token: str | None = None,
+        on_tokens_updated: Callable[[str, str | None], None] | None = None,
         session: requests.Session | None = None,
     ) -> None:
         self.username = username
@@ -82,8 +86,9 @@ class VisaAppointmentClient:
         self.captcha_token = captcha_token
         self.timeout_seconds = timeout_seconds
         self.session = session or requests.Session()
-        self.authorization_token: str | None = None
-        self.refresh_token: str | None = None
+        self.authorization_token = authorization_token or None
+        self.refresh_token = refresh_token or None
+        self.on_tokens_updated = on_tokens_updated
 
     def login(self) -> None:
         if not self.captcha_token:
@@ -108,10 +113,14 @@ class VisaAppointmentClient:
         self.authorization_token = authorization
         self.refresh_token = response.headers.get("Refreshtoken")
         LOGGER.info("Logged in and stored authorization token")
+        if self.on_tokens_updated:
+            self.on_tokens_updated(self.authorization_token, self.refresh_token)
 
     def get_slot_dates(self, request: SlotRequest) -> Any:
         if not self.authorization_token:
             self.login()
+        else:
+            LOGGER.info("Using configured authorization token for slot request")
 
         response = self._post_slots(request)
         if response.status_code in {401, 403}:

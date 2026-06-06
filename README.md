@@ -15,15 +15,26 @@ pip install -r requirements.txt
 python -m embassy_bot.main
 ```
 
+For repeated one-shot testing, run:
+
+```bash
+python -m embassy_bot.main --once
+```
+
 Fill `config.py` before running. The most important fields are:
 
 - `USERNAME`, `PASSWORD`, `CAPTCHA_TOKEN`
+- `AUTHORIZATION_TOKEN`, `REFRESH_TOKEN`
 - `APPLICANT_ID`, `APPLICATION_ID`, `POST_USER_ID`
 - `FROM_DATE`, `TO_DATE`, `CURRENT_APPOINTMENT_DATE`
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
 `CURRENT_APPOINTMENT_DATE` is treated as exclusive. A returned slot on any date
 before that value triggers a Telegram notification.
+
+If `AUTHORIZATION_TOKEN` is set, the bot tries the slot request first and skips
+login. If that request returns `401` or `403`, it logs in once and rewrites
+`AUTHORIZATION_TOKEN` and `REFRESH_TOKEN` in `config.py`.
 
 ## EC2 / systemd
 
