@@ -24,10 +24,9 @@ LOCATION_TYPE = "POST"
 # Optional browser-equivalent headers for SLOTS debugging. Leave empty unless
 # you capture these values from the real browser request.
 SLOT_REFERER = ""
+X_CORRELATION_KEY = ""
 
-FROM_DATE = "2026-06-07"
-TO_DATE = "2026-08-05"
-CURRENT_APPOINTMENT_DATE = "2026-08-06"
+ALERT_DATE_LIMIT = "2026-08-06"
 
 POLL_INTERVAL_SECONDS = 60
 REQUEST_TIMEOUT_SECONDS = 30

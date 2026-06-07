@@ -5,7 +5,8 @@ import json
 import logging
 import signal
 import time
-from datetime import date
+from calendar import monthrange
+from datetime import date, timedelta
 from threading import Event
 
 import config
@@ -26,8 +27,6 @@ def _request_stop(signum: int, _frame: object) -> None:
 
 def build_slot_request() -> SlotRequest:
     return SlotRequest(
-        from_date=config.FROM_DATE,
-        to_date=config.TO_DATE,
         post_user_id=config.POST_USER_ID,
         applicant_id=config.APPLICANT_ID,
         visa_type=config.VISA_TYPE,
@@ -46,7 +45,7 @@ def configure_logging() -> None:
 
 
 def build_runtime(force_login: bool = False) -> tuple[date, SlotRequest, VisaAppointmentClient, TelegramNotifier]:
-    before_date = date.fromisoformat(config.CURRENT_APPOINTMENT_DATE)
+    alert_date_limit = date.fromisoformat(config.ALERT_DATE_LIMIT)
     slot_request = build_slot_request()
     slot_referer = getattr(config, "SLOT_REFERER", "") or slot_request.as_referer()
     client = VisaAppointmentClient(
@@ -66,25 +65,60 @@ def build_runtime(force_login: bool = False) -> tuple[date, SlotRequest, VisaApp
         anchor=config.ANCHOR_BASE_64,
         reload=config.RELOAD_BASE_64,
         slot_referer=slot_referer,
+        correlation_key=getattr(config, "X_CORRELATION_KEY", ""),
     )
     notifier = TelegramNotifier(
         bot_token=config.TELEGRAM_BOT_TOKEN,
         chat_id=config.TELEGRAM_CHAT_ID,
         timeout_seconds=config.REQUEST_TIMEOUT_SECONDS,
     )
-    return before_date, slot_request, client, notifier
+    return alert_date_limit, slot_request, client, notifier
+
+
+def parse_first_month_date(payload: object) -> date | None:
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("present") is False:
+        return None
+    value = payload.get("date")
+    if not isinstance(value, str):
+        return None
+    return date.fromisoformat(value[:10])
+
+
+def slot_window_for_first_month(first_month_date: date) -> tuple[str, str]:
+    from_date = first_month_date - timedelta(days=1)
+    last_day = monthrange(first_month_date.year, first_month_date.month)[1]
+    to_date = date(first_month_date.year, first_month_date.month, last_day)
+    return from_date.isoformat(), to_date.isoformat()
 
 
 def poll_once(
     client: VisaAppointmentClient,
     slot_request: SlotRequest,
-    before_date: date,
+    alert_date_limit: date,
     notifier: TelegramNotifier,
     notified_dates: set[date],
 ) -> None:
-    payload = client.get_slot_dates(slot_request)
+    first_month_payload = client.get_first_available_month(slot_request)
+    LOGGER.info("FIRST_MONTH response payload: %s", json.dumps(first_month_payload, default=str))
+    first_month_date = parse_first_month_date(first_month_payload)
+    if not first_month_date:
+        LOGGER.info("No first available month returned")
+        return
+
+    if first_month_date > alert_date_limit:
+        LOGGER.info(
+            "First available appointment date %s is after alert limit %s",
+            first_month_date.isoformat(),
+            alert_date_limit.isoformat(),
+        )
+        return
+
+    from_date, to_date = slot_window_for_first_month(first_month_date)
+    payload = client.get_slot_dates(slot_request, from_date, to_date)
     LOGGER.info("SLOTS response payload: %s", json.dumps(payload, default=str))
-    dates = find_available_dates(payload, before_date)
+    dates = find_available_dates(payload, date.max)
     new_dates = [day for day in dates if day not in notified_dates]
 
     if new_dates:
@@ -93,18 +127,18 @@ def poll_once(
         notified_dates.update(new_dates)
         LOGGER.info("Found and notified for dates: %s", message)
     else:
-        LOGGER.info("No new appointment dates before %s", before_date.isoformat())
+        LOGGER.info("No new appointment dates returned by SLOTS")
 
 
 def run_once(force_login: bool = False) -> None:
     configure_logging()
-    before_date, slot_request, client, notifier = build_runtime(force_login=force_login)
-    poll_once(client, slot_request, before_date, notifier, set())
+    alert_date_limit, slot_request, client, notifier = build_runtime(force_login=force_login)
+    poll_once(client, slot_request, alert_date_limit, notifier, set())
 
 
 def run_forever() -> None:
     configure_logging()
-    before_date, slot_request, client, notifier = build_runtime()
+    alert_date_limit, slot_request, client, notifier = build_runtime()
     notified_dates: set[date] = set()
 
     signal.signal(signal.SIGINT, _request_stop)
@@ -114,7 +148,7 @@ def run_forever() -> None:
 
     while not STOP_EVENT.is_set():
         try:
-            poll_once(client, slot_request, before_date, notifier, notified_dates)
+            poll_once(client, slot_request, alert_date_limit, notifier, notified_dates)
         except Exception:
             LOGGER.exception("Polling attempt failed")
 

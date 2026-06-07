@@ -27,11 +27,12 @@ Fill `config.py` before running. The most important fields are:
 - `ANCHOR_BASE_64`, `RELOAD_BASE_64` if CapSolver needs anchor/reload payloads
 - `AUTHORIZATION_TOKEN`, `REFRESH_TOKEN`
 - `APPLICANT_ID`, `APPLICATION_ID`, `APP_UUID`, `POST_USER_ID`
-- `FROM_DATE`, `TO_DATE`, `CURRENT_APPOINTMENT_DATE`
+- `ALERT_DATE_LIMIT`
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
-`CURRENT_APPOINTMENT_DATE` is treated as exclusive. A returned slot on any date
-before that value triggers a Telegram notification.
+`ALERT_DATE_LIMIT` is treated as inclusive. If FIRST_MONTH returns a date on or
+before that value, the bot requests that month of SLOTS and sends the returned
+dates to Telegram.
 
 If `AUTHORIZATION_TOKEN` is set, the bot tries the slot request first and skips
 login. If the token is missing, or if the slot request returns `401` or `403`,

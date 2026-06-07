@@ -8,7 +8,7 @@ import requests
 def format_slot_message(dates: list[date]) -> str:
     rendered = ", ".join(day.isoformat() for day in dates)
     plural = "appointment dates" if len(dates) != 1 else "appointment date"
-    return f"US visa {plural} found before your current appointment: {rendered}"
+    return f"US visa {plural} available: {rendered}"
 
 
 class TelegramNotifier:

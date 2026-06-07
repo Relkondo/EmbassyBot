@@ -1,4 +1,7 @@
 import unittest
+import base64
+import json
+import time
 
 from embassy_bot.client import SlotRequest, VisaAppointmentClient
 
@@ -43,8 +46,6 @@ class TestVisaAppointmentClient(VisaAppointmentClient):
 
 def slot_request() -> SlotRequest:
     return SlotRequest(
-        from_date="2026-06-07",
-        to_date="2026-08-05",
         post_user_id=481,
         applicant_id="applicant",
         visa_type="NIV",
@@ -53,6 +54,17 @@ def slot_request() -> SlotRequest:
         application_id="application",
         app_uuid="app-uuid",
     )
+
+
+def fake_jwt(exp: int) -> str:
+    header = {"alg": "none"}
+    payload = {"exp": exp, "token_use": "id"}
+
+    def encode(value) -> str:
+        raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"Bearer {encode(header)}.{encode(payload)}."
 
 
 class ClientTests(unittest.TestCase):
@@ -73,16 +85,47 @@ class ClientTests(unittest.TestCase):
             capsolver_api_key="api-key",
             captcha_url="captcha-url",
             captcha_key="captcha-key",
-            authorization_token="Bearer stored",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
             session=session,
         )
 
-        client.get_slot_dates(slot_request())
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
         self.assertEqual(len(session.requests), 1)
         self.assertEqual(client.captcha_requests, 0)
         self.assertIn("/getSlotDates", session.requests[0]["url"])
-        self.assertEqual(session.requests[0]["headers"]["Authorization"], "Bearer stored")
+        self.assertEqual(session.requests[0]["headers"]["Authorization"], client.authorization_token)
+
+    def test_expired_stored_authorization_token_logs_in_before_slots(self) -> None:
+        session = FakeSession(
+            [
+                FakeResponse(),
+                FakeResponse(
+                    headers={
+                        "Authorization": fake_jwt(int(time.time()) + 3600),
+                        "Refreshtoken": "refresh fresh",
+                    }
+                ),
+                FakeResponse(payload=[]),
+            ]
+        )
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) - 1),
+            refresh_token="refresh stored",
+            session=session,
+        )
+
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
+
+        self.assertEqual(client.captcha_requests, 1)
+        self.assertIn("/visaapplicantui", session.requests[0]["url"])
+        self.assertIn("/identity/user/login", session.requests[1]["url"])
+        self.assertIn("/getSlotDates", session.requests[2]["url"])
 
     def test_expired_token_relogs_and_persists_new_tokens(self) -> None:
         saved_tokens = []
@@ -111,7 +154,7 @@ class ClientTests(unittest.TestCase):
             session=session,
         )
 
-        client.get_slot_dates(slot_request())
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
         self.assertEqual(client.captcha_requests, 1)
         self.assertEqual(saved_tokens, [("Bearer fresh", "refresh fresh")])
@@ -142,7 +185,7 @@ class ClientTests(unittest.TestCase):
             session=session,
         )
 
-        client.get_slot_dates(slot_request())
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
         self.assertEqual(client.captcha_requests, 1)
         self.assertIn("/visaapplicantui", session.requests[0]["url"])
@@ -161,14 +204,61 @@ class ClientTests(unittest.TestCase):
             captcha_key="captcha-key",
             authorization_token="Bearer stored",
             slot_referer="https://www.usvisaappt.com/visaapplicantui/home/appointment/slot",
+            correlation_key="BgawUL5pIjk72i0",
             session=session,
         )
 
-        client.get_slot_dates(slot_request())
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
         self.assertEqual(
             session.requests[0]["headers"]["Referer"],
             "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot",
+        )
+        self.assertEqual(session.requests[0]["headers"]["x-correlation-key"], "BgawUL5pIjk72i0")
+
+    def test_slot_request_uses_compact_json_body(self) -> None:
+        session = FakeSession([FakeResponse(payload=[])])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
+            session=session,
+        )
+
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
+
+        self.assertEqual(
+            session.requests[0]["data"],
+            (
+                '{"fromDate":"2026-06-07","toDate":"2026-08-05","postUserId":481,'
+                '"applicantId":"applicant","visaType":"NIV","visaClass":"H1B",'
+                '"locationType":"POST","applicationId":"application"}'
+            ),
+        )
+
+    def test_first_month_request_omits_slot_date_window(self) -> None:
+        session = FakeSession([FakeResponse(payload={"present": False})])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
+            session=session,
+        )
+
+        client.get_first_available_month(slot_request())
+
+        self.assertEqual(
+            session.requests[0]["data"],
+            (
+                '{"postUserId":481,"applicantId":"applicant","visaType":"NIV",'
+                '"visaClass":"H1B","locationType":"POST","applicationId":"application"}'
+            ),
         )
 
     def test_slot_response_updates_returned_tokens(self) -> None:
@@ -196,7 +286,7 @@ class ClientTests(unittest.TestCase):
             session=session,
         )
 
-        client.get_slot_dates(slot_request())
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
         self.assertEqual(client.authorization_token, "Bearer rotated")
         self.assertEqual(client.refresh_token, "refresh rotated")
