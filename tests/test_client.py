@@ -51,6 +51,7 @@ def slot_request() -> SlotRequest:
         visa_class="H1B",
         location_type="POST",
         application_id="application",
+        app_uuid="app-uuid",
     )
 
 
@@ -60,7 +61,7 @@ class ClientTests(unittest.TestCase):
             slot_request().as_referer(),
             (
                 "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot"
-                "?type=POST&appUUID=application&applicantId=applicant&ofcAppointmentDate="
+                "?type=POST&appUUID=app-uuid&applicantId=applicant&ofcAppointmentDate="
             ),
         )
 

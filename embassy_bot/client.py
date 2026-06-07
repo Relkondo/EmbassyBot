@@ -83,12 +83,13 @@ class SlotRequest:
     visa_class: str
     location_type: str
     application_id: str
+    app_uuid: str
 
     def as_referer(self) -> str:
         query = urlencode(
             {
                 "type": self.location_type,
-                "appUUID": self.application_id,
+                "appUUID": self.app_uuid,
                 "applicantId": self.applicant_id,
                 "ofcAppointmentDate": "",
             }

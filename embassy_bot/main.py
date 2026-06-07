@@ -33,7 +33,8 @@ def build_slot_request() -> SlotRequest:
         visa_type=config.VISA_TYPE,
         visa_class=config.VISA_CLASS,
         location_type=config.LOCATION_TYPE,
-        application_id=getattr(config, "APP_UUID", config.APPLICATION_ID),
+        application_id=config.APPLICATION_ID,
+        app_uuid=config.APP_UUID,
     )
 
 
