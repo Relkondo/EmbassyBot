@@ -15,10 +15,15 @@ REFRESH_TOKEN = ""
 
 APPLICANT_ID = ""
 APPLICATION_ID = ""
+APP_UUID = ""
 POST_USER_ID = 0
 VISA_TYPE = "NIV"
 VISA_CLASS = "H1B"
 LOCATION_TYPE = "POST"
+
+# Optional browser-equivalent headers for SLOTS debugging. Leave empty unless
+# you capture these values from the real browser request.
+SLOT_REFERER = ""
 
 FROM_DATE = "2026-06-07"
 TO_DATE = "2026-08-05"

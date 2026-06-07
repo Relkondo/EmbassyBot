@@ -55,6 +55,15 @@ def slot_request() -> SlotRequest:
 
 
 class ClientTests(unittest.TestCase):
+    def test_slot_request_builds_browser_slot_referer(self) -> None:
+        self.assertEqual(
+            slot_request().as_referer(),
+            (
+                "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot"
+                "?type=POST&appUUID=application&applicantId=applicant&ofcAppointmentDate="
+            ),
+        )
+
     def test_stored_authorization_token_skips_login(self) -> None:
         session = FakeSession([FakeResponse(payload={"slots": []})])
         client = TestVisaAppointmentClient(
@@ -140,6 +149,57 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(session.requests[1]["json"]["captchaToken"], "captcha-1")
         self.assertIn("/getSlotDates", session.requests[2]["url"])
         self.assertEqual(session.requests[2]["headers"]["Authorization"], "Bearer fresh")
+
+    def test_slot_request_uses_configured_referer(self) -> None:
+        session = FakeSession([FakeResponse(payload=[])])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token="Bearer stored",
+            slot_referer="https://www.usvisaappt.com/visaapplicantui/home/appointment/slot",
+            session=session,
+        )
+
+        client.get_slot_dates(slot_request())
+
+        self.assertEqual(
+            session.requests[0]["headers"]["Referer"],
+            "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot",
+        )
+
+    def test_slot_response_updates_returned_tokens(self) -> None:
+        saved_tokens = []
+        session = FakeSession(
+            [
+                FakeResponse(
+                    headers={
+                        "Authorization": "Bearer rotated",
+                        "Refreshtoken": "refresh rotated",
+                    },
+                    payload=[],
+                )
+            ]
+        )
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token="Bearer stored",
+            refresh_token="refresh stored",
+            on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
+            session=session,
+        )
+
+        client.get_slot_dates(slot_request())
+
+        self.assertEqual(client.authorization_token, "Bearer rotated")
+        self.assertEqual(client.refresh_token, "refresh rotated")
+        self.assertEqual(saved_tokens, [("Bearer rotated", "refresh rotated")])
 
 
 if __name__ == "__main__":

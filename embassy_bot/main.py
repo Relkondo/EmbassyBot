@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import signal
 import time
@@ -32,7 +33,7 @@ def build_slot_request() -> SlotRequest:
         visa_type=config.VISA_TYPE,
         visa_class=config.VISA_CLASS,
         location_type=config.LOCATION_TYPE,
-        application_id=config.APPLICATION_ID,
+        application_id=getattr(config, "APP_UUID", config.APPLICATION_ID),
     )
 
 
@@ -43,9 +44,10 @@ def configure_logging() -> None:
     )
 
 
-def build_runtime() -> tuple[date, SlotRequest, VisaAppointmentClient, TelegramNotifier]:
+def build_runtime(force_login: bool = False) -> tuple[date, SlotRequest, VisaAppointmentClient, TelegramNotifier]:
     before_date = date.fromisoformat(config.CURRENT_APPOINTMENT_DATE)
     slot_request = build_slot_request()
+    slot_referer = getattr(config, "SLOT_REFERER", "") or slot_request.as_referer()
     client = VisaAppointmentClient(
         username=config.USERNAME,
         password=config.PASSWORD,
@@ -53,7 +55,7 @@ def build_runtime() -> tuple[date, SlotRequest, VisaAppointmentClient, TelegramN
         captcha_url=config.CAPTCHA_URL,
         captcha_key=config.CAPTCHA_KEY,
         timeout_seconds=config.REQUEST_TIMEOUT_SECONDS,
-        authorization_token=getattr(config, "AUTHORIZATION_TOKEN", ""),
+        authorization_token="" if force_login else getattr(config, "AUTHORIZATION_TOKEN", ""),
         refresh_token=getattr(config, "REFRESH_TOKEN", ""),
         on_tokens_updated=lambda authorization, refresh: persist_tokens_to_config(
             config.__file__,
@@ -62,6 +64,7 @@ def build_runtime() -> tuple[date, SlotRequest, VisaAppointmentClient, TelegramN
         ),
         anchor=config.ANCHOR_BASE_64,
         reload=config.RELOAD_BASE_64,
+        slot_referer=slot_referer,
     )
     notifier = TelegramNotifier(
         bot_token=config.TELEGRAM_BOT_TOKEN,
@@ -79,6 +82,7 @@ def poll_once(
     notified_dates: set[date],
 ) -> None:
     payload = client.get_slot_dates(slot_request)
+    LOGGER.info("SLOTS response payload: %s", json.dumps(payload, default=str))
     dates = find_available_dates(payload, before_date)
     new_dates = [day for day in dates if day not in notified_dates]
 
@@ -91,9 +95,9 @@ def poll_once(
         LOGGER.info("No new appointment dates before %s", before_date.isoformat())
 
 
-def run_once() -> None:
+def run_once(force_login: bool = False) -> None:
     configure_logging()
-    before_date, slot_request, client, notifier = build_runtime()
+    before_date, slot_request, client, notifier = build_runtime(force_login=force_login)
     poll_once(client, slot_request, before_date, notifier, set())
 
 
@@ -125,10 +129,15 @@ def main() -> None:
         action="store_true",
         help="login, poll once, notify if a matching appointment exists, then exit",
     )
+    parser.add_argument(
+        "--force-login",
+        action="store_true",
+        help="ignore configured authorization token and perform a fresh login first",
+    )
     args = parser.parse_args()
 
     if args.once:
-        run_once()
+        run_once(force_login=args.force_login)
     else:
         run_forever()
 

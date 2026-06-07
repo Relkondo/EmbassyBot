@@ -29,6 +29,23 @@ class SlotTests(unittest.TestCase):
 
         self.assertEqual(find_available_dates(payload, date(2026, 8, 6)), [])
 
+    def test_top_level_slot_date_strings(self) -> None:
+        payload = [
+            "2026-08-20T00:00:00.000+00:00",
+            "2026-08-21T00:00:00.000+00:00",
+            "2026-08-25T00:00:00.000+00:00",
+            "2026-08-28T00:00:00.000+00:00",
+        ]
+
+        self.assertEqual(
+            find_available_dates(payload, date(2026, 8, 26)),
+            [
+                date(2026, 8, 20),
+                date(2026, 8, 21),
+                date(2026, 8, 25),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
