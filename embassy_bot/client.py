@@ -27,6 +27,7 @@ APP_URL = "https://www.usvisaappt.com/visaapplicantui/"
 DEFAULT_SLOT_REFERER = (
     "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot"
 )
+GET_USER_URL = "https://www.usvisaappt.com/visauserapi/portal/getuser"
 FIRST_MONTH_URL = (
     "https://www.usvisaappt.com/visaadministrationapi/v1/modifyslot/getFirstAvailableMonth"
 )
@@ -37,15 +38,14 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 )
-SLOT_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-)
+SEC_CH_UA_PLATFORM = '"Windows"'
+SEC_CH_UA = '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"'
+SEC_CH_UA_MOBILE = "?0"
 LOGIN_HEADERS = {
     "Access-Control-Max-Age": "1000",
-    "sec-ch-ua-platform": '"Windows"',
-    "sec-ch-ua": '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
-    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": SEC_CH_UA_PLATFORM,
+    "sec-ch-ua": SEC_CH_UA,
+    "sec-ch-ua-mobile": SEC_CH_UA_MOBILE,
     "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Origin": "*",
     "User-Agent": USER_AGENT,
@@ -71,10 +71,10 @@ APP_HEADERS = {
 }
 
 SLOT_HEADERS = {
-    "sec-ch-ua-platform": '"macOS"',
-    "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
-    "sec-ch-ua-mobile": "?0",
-    "User-Agent": SLOT_USER_AGENT,
+    "sec-ch-ua-platform": SEC_CH_UA_PLATFORM,
+    "sec-ch-ua": SEC_CH_UA,
+    "sec-ch-ua-mobile": SEC_CH_UA_MOBILE,
+    "User-Agent": USER_AGENT,
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en,fr;q=0.9",
     "Content-Type": "application/json",
@@ -85,6 +85,8 @@ SLOT_HEADERS = {
     "Sec-Fetch-Dest": "empty",
     "Priority": "u=1, i",
 }
+
+GET_USER_OMITTED_HEADERS = {"Origin", "Referer", "Accept-Language", "Priority"}
 
 
 @dataclass(frozen=True)
@@ -152,7 +154,7 @@ class VisaAppointmentClient:
         self.captcha_token: str | None = None
         self.timeout_seconds = timeout_seconds
         self.session = session or requests.Session()
-        self.authorization_token = authorization_token or None
+        self.authorization_token = self.normalize_authorization_token(authorization_token)
         self.refresh_token = refresh_token or None
         self.on_tokens_updated = on_tokens_updated
         self.anchor = anchor
@@ -213,7 +215,7 @@ class VisaAppointmentClient:
         LOGGER.info("Logged in and stored authorization token")
 
     def update_tokens_from_response(self, response: requests.Response) -> bool:
-        authorization = response.headers.get("Authorization")
+        authorization = self.normalize_authorization_token(response.headers.get("Authorization"))
         refresh_token = response.headers.get("Refreshtoken")
         if not authorization:
             return False
@@ -276,13 +278,7 @@ class VisaAppointmentClient:
         return ""
 
     def get_first_available_month(self, request: SlotRequest) -> Any:
-        if not self.has_authorization_token():
-            self.login()
-        elif self.is_authorization_token_expired():
-            LOGGER.info("Configured authorization token is expired or near expiry; logging in")
-            self.login()
-        else:
-            LOGGER.info("Using configured authorization token for slot request")
+        self.ensure_authorized("FIRST_MONTH")
 
         response = self._post_first_month(request)
         if response.status_code in {401, 403}:
@@ -297,13 +293,7 @@ class VisaAppointmentClient:
         return response.json()
 
     def get_slot_dates(self, request: SlotRequest, from_date: str, to_date: str) -> Any:
-        if not self.has_authorization_token():
-            self.login()
-        elif self.is_authorization_token_expired():
-            LOGGER.info("Configured authorization token is expired or near expiry; logging in")
-            self.login()
-        else:
-            LOGGER.info("Using configured authorization token for slot request")
+        self.ensure_authorized("SLOTS")
 
         response = self._post_slots(request, from_date, to_date)
         if response.status_code in {401, 403}:
@@ -316,6 +306,30 @@ class VisaAppointmentClient:
             self.log_api_failure("SLOTS", response)
         response.raise_for_status()
         return response.json()
+
+    def get_user(self) -> Any:
+        self.ensure_authorized("GET_USER")
+
+        response = self._get_user()
+        if response.status_code in {401, 403}:
+            LOGGER.warning("GET_USER request was unauthorized; attempting one fresh login")
+            self.login()
+            response = self._get_user()
+
+        self.update_tokens_from_response(response)
+        if response.status_code >= 400:
+            self.log_api_failure("GET_USER", response)
+        response.raise_for_status()
+        return response.json()
+
+    def ensure_authorized(self, label: str) -> None:
+        if not self.has_authorization_token():
+            self.login()
+        elif self.is_authorization_token_expired():
+            LOGGER.info("Configured authorization token is expired or near expiry; logging in")
+            self.login()
+        else:
+            LOGGER.info("Using configured authorization token for %s request", label)
 
     def log_api_failure(self, label: str, response: requests.Response) -> None:
         safe_headers = {
@@ -339,12 +353,7 @@ class VisaAppointmentClient:
         LOGGER.error("%s response body snippet: %s", label, snippet)
 
     def _authorized_post(self, url: str, body_json: dict[str, Any]) -> requests.Response:
-        headers = {
-            **SLOT_HEADERS,
-            "Authorization": self.authorization_token or "",
-            "Referer": self.slot_referer,
-            "x-correlation-key": self.correlation_key or self.generate_correlation_key(),
-        }
+        headers = self._authorized_headers()
         body = json.dumps(body_json, separators=(",", ":"))
         return self.session.post(
             url,
@@ -352,6 +361,35 @@ class VisaAppointmentClient:
             data=body,
             timeout=self.timeout_seconds,
         )
+
+    def _authorized_get(self, url: str) -> requests.Response:
+        return self.session.get(
+            url,
+            headers=self._get_user_headers(),
+            timeout=self.timeout_seconds,
+        )
+
+    def _authorized_headers(self) -> dict[str, str]:
+        headers = {
+            **SLOT_HEADERS,
+            "Authorization": self.authorization_token or "",
+            "Referer": self.slot_referer,
+            "x-correlation-key": self.correlation_key or self.generate_correlation_key(),
+        }
+        return headers
+
+    def _get_user_headers(self) -> dict[str, str]:
+        headers = {
+            name: value
+            for name, value in self._authorized_headers().items()
+            if name not in GET_USER_OMITTED_HEADERS
+        }
+        headers["host"] = "www.usvisaappt.com"
+        headers["X-Correlation-key"] = headers.pop("x-correlation-key")
+        return headers
+
+    def _get_user(self) -> requests.Response:
+        return self._authorized_get(GET_USER_URL)
 
     def _post_first_month(self, request: SlotRequest) -> requests.Response:
         return self._authorized_post(FIRST_MONTH_URL, request.as_first_month_json())
@@ -363,3 +401,14 @@ class VisaAppointmentClient:
     def generate_correlation_key(length: int = 15) -> str:
         alphabet = string.ascii_letters + string.digits
         return "".join(secrets.choice(alphabet) for _ in range(length))
+
+    @staticmethod
+    def normalize_authorization_token(token: str | None) -> str | None:
+        if not token:
+            return None
+        token = token.strip()
+        if not token:
+            return None
+        if token.startswith("Bearer "):
+            return token
+        return f"Bearer {token}"

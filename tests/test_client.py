@@ -67,6 +67,10 @@ def fake_jwt(exp: int) -> str:
     return f"Bearer {encode(header)}.{encode(payload)}."
 
 
+def raw_fake_jwt(exp: int) -> str:
+    return fake_jwt(exp).split(" ", 1)[1]
+
+
 class ClientTests(unittest.TestCase):
     def test_slot_request_builds_browser_slot_referer(self) -> None:
         self.assertEqual(
@@ -94,6 +98,23 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(session.requests), 1)
         self.assertEqual(client.captcha_requests, 0)
         self.assertIn("/getSlotDates", session.requests[0]["url"])
+        self.assertEqual(session.requests[0]["headers"]["Authorization"], client.authorization_token)
+
+    def test_raw_stored_authorization_token_gets_bearer_prefix(self) -> None:
+        session = FakeSession([FakeResponse(payload={"user": "ok"})])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=raw_fake_jwt(int(time.time()) + 3600),
+            session=session,
+        )
+
+        client.get_user()
+
+        self.assertTrue(client.authorization_token.startswith("Bearer "))
         self.assertEqual(session.requests[0]["headers"]["Authorization"], client.authorization_token)
 
     def test_expired_stored_authorization_token_logs_in_before_slots(self) -> None:
@@ -216,6 +237,39 @@ class ClientTests(unittest.TestCase):
         )
         self.assertEqual(session.requests[0]["headers"]["x-correlation-key"], "BgawUL5pIjk72i0")
 
+    def test_get_user_uses_authorized_get_request(self) -> None:
+        session = FakeSession([FakeResponse(payload={"user": "ok"})])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
+            slot_referer="https://www.usvisaappt.com/visaapplicantui/home/appointment/slot",
+            correlation_key="BgawUL5pIjk72i0",
+            session=session,
+        )
+
+        self.assertEqual(client.get_user(), {"user": "ok"})
+
+        self.assertEqual(len(session.requests), 1)
+        self.assertIn("/visauserapi/portal/getuser", session.requests[0]["url"])
+        self.assertNotIn("data", session.requests[0])
+        self.assertEqual(session.requests[0]["headers"]["Authorization"], client.authorization_token)
+        self.assertEqual(session.requests[0]["headers"]["X-Correlation-key"], "BgawUL5pIjk72i0")
+        self.assertEqual(session.requests[0]["headers"]["host"], "www.usvisaappt.com")
+        self.assertEqual(session.requests[0]["headers"]["sec-ch-ua-platform"], '"Windows"')
+        self.assertEqual(
+            session.requests[0]["headers"]["sec-ch-ua"],
+            '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+        )
+        self.assertIn("Chrome/138.0.0.0", session.requests[0]["headers"]["User-Agent"])
+        self.assertNotIn("Origin", session.requests[0]["headers"])
+        self.assertNotIn("Referer", session.requests[0]["headers"])
+        self.assertNotIn("Accept-Language", session.requests[0]["headers"])
+        self.assertNotIn("Priority", session.requests[0]["headers"])
+
     def test_slot_request_uses_compact_json_body(self) -> None:
         session = FakeSession([FakeResponse(payload=[])])
         client = TestVisaAppointmentClient(
@@ -291,6 +345,37 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(client.authorization_token, "Bearer rotated")
         self.assertEqual(client.refresh_token, "refresh rotated")
         self.assertEqual(saved_tokens, [("Bearer rotated", "refresh rotated")])
+
+    def test_raw_response_authorization_token_gets_bearer_prefix_before_persist(self) -> None:
+        saved_tokens = []
+        raw_token = raw_fake_jwt(int(time.time()) + 3600)
+        session = FakeSession(
+            [
+                FakeResponse(
+                    headers={
+                        "Authorization": raw_token,
+                        "Refreshtoken": "refresh rotated",
+                    },
+                    payload=[],
+                )
+            ]
+        )
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token="Bearer stored",
+            refresh_token="refresh stored",
+            on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
+            session=session,
+        )
+
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
+
+        self.assertEqual(client.authorization_token, f"Bearer {raw_token}")
+        self.assertEqual(saved_tokens, [(f"Bearer {raw_token}", "refresh rotated")])
 
 
 if __name__ == "__main__":
