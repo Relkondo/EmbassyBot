@@ -78,7 +78,9 @@ def poll_once(
     booking_date_limit: date | None,
     notifier: TelegramNotifier,
     state: PollState,
+    chain_delay: Callable[[], None] | None = None,
 ) -> None:
+    chain_delay = chain_delay or (lambda: None)
     appointment_context = get_appointment_context(
         client,
         configured_application_id,
@@ -112,6 +114,7 @@ def poll_once(
         notify_availability_changes([], state.announced_start_times, notifier)
         return
 
+    chain_delay()
     from_date, to_date = slot_window_for_first_month(first_month_date)
     payload = call_or_notify(
         "SLOTS",
@@ -136,6 +139,7 @@ def poll_once(
         notify_availability_changes([], state.announced_start_times, notifier)
         return
 
+    chain_delay()
     today = date.today()
     time_to_date = month_end(earliest_date)
     time_payload = call_or_notify(
@@ -156,6 +160,7 @@ def poll_once(
     if start_times:
         booking_slot = first_bookable_slot(slot_times, booking_date_limit)
         if booking_slot:
+            chain_delay()
             notify_booking_attempt(client, slot_request, appointment_id, booking_slot, notifier, state)
         else:
             notify_availability_changes(start_times, state.announced_start_times, notifier)
@@ -292,11 +297,26 @@ def should_notify_call_failure(failure: FailureDetails) -> bool:
     if failure.status_code is not None:
         return True
 
-    message = failure.message
-    return not (
+    return not is_transient_remote_disconnect_message(failure.message)
+
+
+def is_transient_remote_disconnect(exc: Exception) -> bool:
+    return is_transient_remote_disconnect_message(str(exc))
+
+
+def is_transient_remote_disconnect_message(message: str) -> bool:
+    return (
         "Connection aborted" in message
         and "RemoteDisconnected" in message
         and "Remote end closed connection without response" in message
+    )
+
+
+def is_access_temporarily_restricted(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    body = getattr(response, "text", "")
+    return "Access temporarily restricted" in str(exc) or (
+        isinstance(body, str) and "Access temporarily restricted" in body
     )
 
 

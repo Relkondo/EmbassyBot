@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 import signal
+import time
 from datetime import date
 from pathlib import Path
 from threading import Event
@@ -12,11 +14,18 @@ from embassy_bot.client import VisaAppointmentClient
 from embassy_bot.config_store import persist_tokens_to_config
 from embassy_bot.notifier import TelegramNotifier
 from embassy_bot.state_store import DEFAULT_STATE_FILE, PollState, load_poll_state, save_poll_state
-from embassy_bot.workflow import poll_once
+from embassy_bot.workflow import (
+    is_access_temporarily_restricted,
+    is_transient_remote_disconnect,
+    poll_once,
+)
 
 
 LOGGER = logging.getLogger("embassy_bot")
 STOP_EVENT = Event()
+TRANSIENT_DISCONNECT_BACKOFF_SECONDS = 8 * 60
+CHAIN_DELAY_MIN_SECONDS = 1.0
+CHAIN_DELAY_MAX_SECONDS = 4.0
 
 
 def _request_stop(signum: int, _frame: object) -> None:
@@ -54,7 +63,6 @@ def build_runtime(
         anchor=config.ANCHOR_BASE_64,
         reload=config.RELOAD_BASE_64,
         slot_referer="",
-        correlation_key="",
     )
     notifier = TelegramNotifier(
         bot_token=config.TELEGRAM_BOT_TOKEN,
@@ -82,13 +90,16 @@ def parse_optional_string(value: object) -> str | None:
 
 def run_once(force_login: bool = False) -> None:
     configure_logging()
-    configured_application_id, booking_date_limit, _state_path, client, notifier = build_runtime(force_login=force_login)
+    configured_application_id, booking_date_limit, _state_path, client, notifier = build_runtime(
+        force_login=force_login
+    )
     poll_once(
         client,
         configured_application_id,
         booking_date_limit,
         notifier,
         PollState(),
+        sleep_between_chained_calls,
     )
 
 
@@ -100,10 +111,17 @@ def run_forever() -> None:
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
 
-    LOGGER.info("Starting polling every %s seconds", config.POLL_INTERVAL_SECONDS)
+    base_interval_seconds = getattr(config, "BASE_INTERVAL_SECONDS", 180)
+    jitter_seconds = getattr(config, "JITTER_SECONDS", 45)
+    LOGGER.info(
+        "Starting polling every %s seconds +/- %s seconds",
+        base_interval_seconds,
+        jitter_seconds,
+    )
 
     try:
         while not STOP_EVENT.is_set():
+            wait_seconds = jittered_interval_seconds(base_interval_seconds, jitter_seconds)
             try:
                 poll_once(
                     client,
@@ -111,14 +129,45 @@ def run_forever() -> None:
                     booking_date_limit,
                     notifier,
                     state,
+                    sleep_between_chained_calls,
                 )
-            except Exception:
-                LOGGER.exception("Polling attempt failed")
+            except Exception as exc:
+                if is_access_temporarily_restricted(exc):
+                    LOGGER.exception("Access temporarily restricted; stopping polling")
+                    STOP_EVENT.set()
+                    break
+                if is_transient_remote_disconnect(exc):
+                    wait_seconds = TRANSIENT_DISCONNECT_BACKOFF_SECONDS
+                    LOGGER.exception(
+                        "Polling attempt failed due to transient remote disconnect; "
+                        "waiting %s seconds before retry",
+                        wait_seconds,
+                    )
+                else:
+                    LOGGER.exception("Polling attempt failed")
 
-            STOP_EVENT.wait(config.POLL_INTERVAL_SECONDS)
+            if STOP_EVENT.is_set():
+                break
+            LOGGER.info("Waiting %.1f seconds before next poll", wait_seconds)
+            STOP_EVENT.wait(wait_seconds)
     finally:
         save_poll_state(state_path, state)
         LOGGER.info("Stopped polling")
+
+
+def jittered_interval_seconds(base_interval_seconds: int, jitter_seconds: int) -> float:
+    if jitter_seconds <= 0:
+        return float(base_interval_seconds)
+    return max(
+        1.0,
+        float(base_interval_seconds + random.uniform(-jitter_seconds, jitter_seconds)),
+    )
+
+
+def sleep_between_chained_calls() -> None:
+    delay_seconds = random.uniform(CHAIN_DELAY_MIN_SECONDS, CHAIN_DELAY_MAX_SECONDS)
+    LOGGER.info("Waiting %.1f seconds before next chained appointment API call", delay_seconds)
+    time.sleep(delay_seconds)
 
 
 def main() -> None:

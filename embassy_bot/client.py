@@ -178,7 +178,6 @@ class VisaAppointmentClient:
         anchor: str | None = None,
         reload: str | None = None,
         slot_referer: str | None = None,
-        correlation_key: str | None = None,
     ) -> None:
         self.username = username
         self.password = password
@@ -193,7 +192,6 @@ class VisaAppointmentClient:
         self.anchor = anchor
         self.reload = reload
         self.slot_referer = slot_referer or DEFAULT_SLOT_REFERER
-        self.correlation_key = correlation_key or None
 
     def has_authorization_token(self) -> bool:
         return bool(self.authorization_token)
@@ -433,7 +431,7 @@ class VisaAppointmentClient:
             **SLOT_HEADERS,
             "Authorization": self.authorization_token or "",
             "Referer": self.slot_referer,
-            "x-correlation-key": self.correlation_key or self.generate_correlation_key(),
+            "x-correlation-key": self.generate_correlation_key(),
         }
         return headers
 

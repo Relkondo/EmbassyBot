@@ -329,7 +329,6 @@ class ClientTests(unittest.TestCase):
             captcha_key="captcha-key",
             authorization_token="Bearer stored",
             slot_referer="https://www.usvisaappt.com/visaapplicantui/home/appointment/slot",
-            correlation_key="BgawUL5pIjk72i0",
             session=session,
         )
 
@@ -339,7 +338,27 @@ class ClientTests(unittest.TestCase):
             session.requests[0]["headers"]["Referer"],
             "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot",
         )
-        self.assertEqual(session.requests[0]["headers"]["x-correlation-key"], "BgawUL5pIjk72i0")
+        self.assertEqual(len(session.requests[0]["headers"]["x-correlation-key"]), 15)
+
+    def test_authorized_requests_use_fresh_correlation_key(self) -> None:
+        session = FakeSession([FakeResponse(payload=[]), FakeResponse(payload=[])])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
+            session=session,
+        )
+        keys = iter(["first-key", "second-key"])
+        client.generate_correlation_key = lambda: next(keys)
+
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
+        client.get_first_available_month(slot_request())
+
+        self.assertEqual(session.requests[0]["headers"]["x-correlation-key"], "first-key")
+        self.assertEqual(session.requests[1]["headers"]["x-correlation-key"], "second-key")
 
     def test_slot_request_uses_compact_json_body(self) -> None:
         session = FakeSession([FakeResponse(payload=[])])

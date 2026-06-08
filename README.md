@@ -29,6 +29,7 @@ Fill `config.py` before running. The most important fields are:
 - `APPLICATION_ID` as an optional selector if multiple applications exist
 - `BOOKING_DATE_LIMIT`
 - `STATE_FILE`
+- `BASE_INTERVAL_SECONDS`, `JITTER_SECONDS`
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
 After authentication, the bot calls GET_LANDING_PAGE_DETAILS and extracts the
@@ -53,6 +54,13 @@ the booked time.
 `STATE_FILE` stores appointment datetimes that were already announced, so a
 service restart does not repeat availability messages. Relative paths are
 resolved next to `config.py`. It is written when the long-running process exits.
+
+Long-running polling waits `BASE_INTERVAL_SECONDS` plus or minus a random
+`JITTER_SECONDS` value between attempts. After a transient remote disconnect
+where the server closes the connection without a response, the bot suppresses
+Telegram notification and waits eight minutes before retrying. When a deeper
+availability chain is needed, it also waits a random one to four seconds between
+`FIRST_MONTH`, `SLOTS`, `GET_TIME`, and booking calls.
 
 If `AUTHORIZATION_TOKEN` is set, the bot uses it until it is within five minutes
 of expiry, which is roughly 55 minutes after login for the current site tokens.

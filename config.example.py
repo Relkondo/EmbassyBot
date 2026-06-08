@@ -22,7 +22,8 @@ BOOKING_DATE_LIMIT = ""
 # Stores announced appointment datetimes so service restarts do not re-alert them.
 STATE_FILE = "embassy_bot_state.json"
 
-POLL_INTERVAL_SECONDS = 60
+BASE_INTERVAL_SECONDS = 180
+JITTER_SECONDS = 45
 REQUEST_TIMEOUT_SECONDS = 30
 
 TELEGRAM_BOT_TOKEN = ""

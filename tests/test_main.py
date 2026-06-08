@@ -118,6 +118,16 @@ class TransientFirstMonthClient(FakeClient):
         )
 
 
+class LateFirstMonthClient(FakeClient):
+    def get_first_available_month(self, request):
+        self.calls.append("FIRST_MONTH")
+        return {
+            "date": "2026-10-01T00:00:00.000+00:00",
+            "message": "Slot is available",
+            "present": True,
+        }
+
+
 class NoFirstMonthClient(FakeClient):
     def get_first_available_month(self, request):
         self.calls.append("FIRST_MONTH")
@@ -202,6 +212,38 @@ class MainWorkflowTests(unittest.TestCase):
 
         self.assertEqual(client.calls.count("GET_LANDING_PAGE_DETAILS"), 1)
         self.assertEqual(client.calls.count("FIRST_MONTH"), 2)
+
+    def test_poll_once_stops_after_first_month_when_date_is_after_alert_limit(self) -> None:
+        client = LateFirstMonthClient()
+        notifier = FakeNotifier()
+        delay_calls = []
+
+        poll_once(
+            client,
+            "application",
+            None,
+            notifier,
+            PollState(),
+            lambda: delay_calls.append("delay"),
+        )
+
+        self.assertEqual(client.calls, ["GET_LANDING_PAGE_DETAILS", "FIRST_MONTH"])
+        self.assertEqual(delay_calls, [])
+        self.assertEqual(notifier.messages, [])
+
+    def test_poll_once_delays_between_deeper_api_calls(self) -> None:
+        delay_calls = []
+
+        poll_once(
+            FakeClient(),
+            "application",
+            None,
+            FakeNotifier(),
+            PollState(),
+            lambda: delay_calls.append("delay"),
+        )
+
+        self.assertEqual(delay_calls, ["delay", "delay"])
 
     def test_poll_once_notifies_when_appointment_time_stops_being_available(self) -> None:
         notifier = FakeNotifier()
