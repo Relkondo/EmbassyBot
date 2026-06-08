@@ -35,6 +35,9 @@ After authentication, the bot calls GET_LANDING_PAGE_DETAILS and extracts the
 current appointment, applicant, visa, post, and alert date values from the
 selected application. If `APPLICATION_ID` is empty, the most recently created
 application is selected.
+In long-running polling mode, this appointment context is loaded once and
+reused across polls. After a successful booking, it is cleared so the next poll
+reloads the updated current appointment.
 
 The current appointment date from GET_LANDING_PAGE_DETAILS is treated as the
 alert date limit. If FIRST_MONTH returns a date on or before that value, the bot

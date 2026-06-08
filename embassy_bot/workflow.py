@@ -81,15 +81,12 @@ def poll_once(
     state: PollState,
 ) -> None:
     attach_client_failure_hooks(client, notifier, state)
-
-    landing_payload = call_or_notify(
-        "GET_LANDING_PAGE_DETAILS",
+    appointment_context = get_appointment_context(
+        client,
+        configured_application_id,
         notifier,
         state,
-        client.get_landing_page_details,
     )
-    LOGGER.info("GET_LANDING_PAGE_DETAILS response payload: %s", json.dumps(landing_payload, default=str))
-    appointment_context = build_appointment_context(landing_payload, configured_application_id)
     slot_request = appointment_context.slot_request
     alert_date_limit = appointment_context.alert_date_limit
     appointment_id = appointment_context.appointment_id
@@ -169,6 +166,28 @@ def poll_once(
         notify_availability_changes([], state.announced_start_times, notifier)
 
 
+def get_appointment_context(
+    client: VisaAppointmentClient,
+    configured_application_id: str | None,
+    notifier: TelegramNotifier,
+    state: PollState,
+) -> AppointmentContext:
+    if isinstance(state.appointment_context, AppointmentContext):
+        LOGGER.info("Using cached appointment context")
+        return state.appointment_context
+
+    landing_payload = call_or_notify(
+        "GET_LANDING_PAGE_DETAILS",
+        notifier,
+        state,
+        client.get_landing_page_details,
+    )
+    LOGGER.info("GET_LANDING_PAGE_DETAILS response payload: %s", json.dumps(landing_payload, default=str))
+    appointment_context = build_appointment_context(landing_payload, configured_application_id)
+    state.appointment_context = appointment_context
+    return appointment_context
+
+
 def attach_client_failure_hooks(
     client: VisaAppointmentClient,
     notifier: TelegramNotifier,
@@ -211,6 +230,8 @@ def notify_booking_attempt(
         return
 
     state.failed_call_names.discard("BOOKING")
+    state.appointment_context = None
+    state.announced_start_times.clear()
     LOGGER.info("BOOKING response payload: %s", json.dumps(booking_payload, default=str))
     message = format_booking_message(
         booking_slot.start_time,

@@ -304,6 +304,58 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(failures[0].status_code, 401)
         self.assertIn("LOGIN", successes)
 
+    def test_unauthorized_after_successful_refresh_falls_back_to_full_login(self) -> None:
+        saved_tokens = []
+        session = FakeSession(
+            [
+                FakeResponse(status_code=401),
+                FakeResponse(
+                    headers={
+                        "Authorization": "Bearer refreshed",
+                        "Refreshtoken": "refresh refreshed",
+                    }
+                ),
+                FakeResponse(status_code=401),
+                FakeResponse(),
+                FakeResponse(
+                    headers={
+                        "Authorization": "Bearer login fresh",
+                        "Refreshtoken": "refresh login fresh",
+                    }
+                ),
+                FakeResponse(payload={"slots": []}),
+            ]
+        )
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
+            refresh_token="refresh stored",
+            on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
+            session=session,
+        )
+
+        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
+
+        self.assertEqual(client.captcha_requests, 1)
+        self.assertIn("/getSlotDates", session.requests[0]["url"])
+        self.assertIn("/identity/user/refreshToken", session.requests[1]["url"])
+        self.assertIn("/getSlotDates", session.requests[2]["url"])
+        self.assertIn("/visaapplicantui", session.requests[3]["url"])
+        self.assertIn("/identity/user/login", session.requests[4]["url"])
+        self.assertIn("/getSlotDates", session.requests[5]["url"])
+        self.assertEqual(session.requests[5]["headers"]["Authorization"], "Bearer login fresh")
+        self.assertEqual(
+            saved_tokens,
+            [
+                ("Bearer refreshed", "refresh refreshed"),
+                ("Bearer login fresh", "refresh login fresh"),
+            ],
+        )
+
     def test_missing_authorization_token_refreshes_before_slots(self) -> None:
         session = FakeSession(
             [

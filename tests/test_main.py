@@ -192,6 +192,17 @@ class MainWorkflowTests(unittest.TestCase):
             {datetime(2026, 8, 20, 8, 30, tzinfo=timezone.utc)},
         )
 
+    def test_poll_once_reuses_landing_context_between_polls(self) -> None:
+        client = FakeClient()
+        notifier = FakeNotifier()
+        state = PollState()
+
+        poll_once(client, "application", None, notifier, state)
+        poll_once(client, "application", None, notifier, state)
+
+        self.assertEqual(client.calls.count("GET_LANDING_PAGE_DETAILS"), 1)
+        self.assertEqual(client.calls.count("FIRST_MONTH"), 2)
+
     def test_poll_once_notifies_when_appointment_time_stops_being_available(self) -> None:
         notifier = FakeNotifier()
         state = PollState()
@@ -214,13 +225,14 @@ class MainWorkflowTests(unittest.TestCase):
     def test_poll_once_books_slot_before_booking_limit(self) -> None:
         client = FakeClient()
         notifier = FakeNotifier()
+        state = PollState()
 
         poll_once(
             client,
             "application",
             date(2026, 8, 21),
             notifier,
-            PollState(),
+            state,
         )
 
         self.assertEqual(
@@ -247,6 +259,8 @@ class MainWorkflowTests(unittest.TestCase):
                 "are available."
             ),
         )
+        self.assertIsNone(state.appointment_context)
+        self.assertEqual(state.announced_start_times, set())
 
     def test_poll_once_notifies_when_booking_fails(self) -> None:
         client = FakeClient(booking_error=RuntimeError("booking exploded"))

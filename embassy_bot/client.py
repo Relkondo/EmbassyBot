@@ -439,8 +439,13 @@ class VisaAppointmentClient:
         response = send_request()
         if response.status_code in {401, 403}:
             LOGGER.warning("%s request was unauthorized; attempting token refresh", label)
-            self.refresh_or_login()
-            response = send_request()
+            if self.refresh_authorization_token():
+                response = send_request()
+
+            if response.status_code in {401, 403}:
+                LOGGER.warning("%s request was still unauthorized; falling back to full login", label)
+                self.login()
+                response = send_request()
 
         self.update_tokens_from_response(response)
         if response.status_code >= 400:

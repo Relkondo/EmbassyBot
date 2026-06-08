@@ -15,6 +15,7 @@ DEFAULT_STATE_FILE = "embassy_bot_state.json"
 class PollState:
     announced_start_times: set[datetime] = field(default_factory=set)
     failed_call_names: set[str] = field(default_factory=set)
+    appointment_context: object | None = None
 
 
 def load_poll_state(path: str | Path) -> PollState:

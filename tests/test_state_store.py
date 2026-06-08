@@ -24,6 +24,7 @@ class StateStoreTests(unittest.TestCase):
                         datetime(2026, 8, 21, 8, 30, tzinfo=timezone.utc),
                     },
                     failed_call_names={"SLOTS"},
+                    appointment_context=object(),
                 ),
             )
 
@@ -34,6 +35,7 @@ class StateStoreTests(unittest.TestCase):
             {datetime(2026, 8, 21, 8, 30, tzinfo=timezone.utc)},
         )
         self.assertEqual(state.failed_call_names, set())
+        self.assertIsNone(state.appointment_context)
 
 
 if __name__ == "__main__":
