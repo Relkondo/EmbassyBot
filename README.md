@@ -24,7 +24,7 @@ Fill `config.py` before running. The most important fields are:
 
 - `USERNAME`, `PASSWORD`
 - `CAPSOLVER_API_KEY`, `CAPTCHA_URL`, `CAPTCHA_KEY`
-- `ANCHOR_BASE_64`, `RELOAD_BASE_64` if CapSolver needs anchor/reload payloads
+- `ANCHOR_BASE_64_FILE`, `RELOAD_BASE_64_FILE` if CapSolver needs anchor/reload payloads
 - `AUTHORIZATION_TOKEN`
 - `APPLICATION_ID` as an optional selector if multiple applications exist
 - `BOOKING_DATE_LIMIT`

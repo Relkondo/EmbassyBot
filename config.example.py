@@ -5,8 +5,8 @@ PASSWORD = "your-login-password"
 CAPSOLVER_API_KEY = ""
 CAPTCHA_URL = "https://www.usvisaappt.com/visaapplicantui"
 CAPTCHA_KEY = ""
-ANCHOR_BASE_64 = ""
-RELOAD_BASE_64 = ""
+ANCHOR_BASE_64_FILE = ""
+RELOAD_BASE_64_FILE = ""
 
 # Updated automatically after login. Used until it is within five minutes of
 # expiry, then the bot performs a full login and stores the new token.

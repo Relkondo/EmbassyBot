@@ -12,6 +12,7 @@ from threading import Event
 import config
 from embassy_bot.client import VisaAppointmentClient
 from embassy_bot.config_store import persist_tokens_to_config
+from embassy_bot.config_values import load_optional_config_text
 from embassy_bot.notifier import TelegramNotifier
 from embassy_bot.state_store import DEFAULT_STATE_FILE, PollState, load_poll_state, save_poll_state
 from embassy_bot.workflow import (
@@ -60,8 +61,8 @@ def build_runtime(
             config.__file__,
             authorization,
         ),
-        anchor=config.ANCHOR_BASE_64,
-        reload=config.RELOAD_BASE_64,
+        anchor=load_optional_config_text(config, "ANCHOR_BASE_64", "ANCHOR_BASE_64_FILE"),
+        reload=load_optional_config_text(config, "RELOAD_BASE_64", "RELOAD_BASE_64_FILE"),
         slot_referer="",
     )
     notifier = TelegramNotifier(
