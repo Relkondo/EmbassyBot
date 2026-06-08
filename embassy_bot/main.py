@@ -100,9 +100,6 @@ def poll_once(
     notifier: TelegramNotifier,
     notified_dates: set[date],
 ) -> None:
-    client.get_user()
-    LOGGER.info("GET_USER request succeeded")
-
     first_month_payload = client.get_first_available_month(slot_request)
     LOGGER.info("FIRST_MONTH response payload: %s", json.dumps(first_month_payload, default=str))
     first_month_date = parse_first_month_date(first_month_payload)

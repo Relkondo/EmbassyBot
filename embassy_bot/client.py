@@ -19,15 +19,15 @@ from embassy_bot.crypto import build_login_authorization
 
 LOGGER = logging.getLogger(__name__)
 MAX_RESPONSE_SNIPPET_LENGTH = 1000
-TOKEN_EXPIRY_SKEW_SECONDS = 60
+TOKEN_EXPIRY_SKEW_SECONDS = 300
 SENSITIVE_RESPONSE_HEADERS = {"authorization", "cookie", "refreshtoken", "set-cookie"}
 
 LOGIN_URL = "https://www.usvisaappt.com/identity/user/login"
+REFRESH_TOKEN_URL = "https://www.usvisaappt.com/identity/user/refreshToken"
 APP_URL = "https://www.usvisaappt.com/visaapplicantui/"
 DEFAULT_SLOT_REFERER = (
     "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot"
 )
-GET_USER_URL = "https://www.usvisaappt.com/visauserapi/portal/getuser"
 FIRST_MONTH_URL = (
     "https://www.usvisaappt.com/visaadministrationapi/v1/modifyslot/getFirstAvailableMonth"
 )
@@ -86,7 +86,22 @@ SLOT_HEADERS = {
     "Priority": "u=1, i",
 }
 
-GET_USER_OMITTED_HEADERS = {"Origin", "Referer", "Accept-Language", "Priority"}
+REFRESH_HEADERS = {
+    "sec-ch-ua-platform": SEC_CH_UA_PLATFORM,
+    "sec-ch-ua": SEC_CH_UA,
+    "sec-ch-ua-mobile": SEC_CH_UA_MOBILE,
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en,fr;q=0.9",
+    "Content-Type": "application/json",
+    "Origin": ORIGIN,
+    "Referer": DEFAULT_SLOT_REFERER,
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Dest": "empty",
+    "Priority": "u=1, i",
+    "host": "www.usvisaappt.com",
+}
 
 
 @dataclass(frozen=True)
@@ -214,6 +229,36 @@ class VisaAppointmentClient:
 
         LOGGER.info("Logged in and stored authorization token")
 
+    def refresh_authorization_token(self) -> bool:
+        if not self.refresh_token:
+            return False
+
+        body = {
+            "refreshToken": self.refresh_token,
+            "username": self.username,
+        }
+        try:
+            response = self.session.post(
+                REFRESH_TOKEN_URL,
+                headers=self._refresh_headers(),
+                data=json.dumps(body, separators=(",", ":")),
+                timeout=self.timeout_seconds,
+            )
+        except requests.RequestException:
+            LOGGER.exception("Refresh token request failed")
+            return False
+
+        if response.status_code >= 400:
+            self.log_api_failure("REFRESH_TOKEN", response)
+            return False
+
+        if not self.update_tokens_from_response(response):
+            LOGGER.warning("Refresh token request succeeded but returned no Authorization header")
+            return False
+
+        LOGGER.info("Refreshed authorization token")
+        return True
+
     def update_tokens_from_response(self, response: requests.Response) -> bool:
         authorization = self.normalize_authorization_token(response.headers.get("Authorization"))
         refresh_token = response.headers.get("Refreshtoken")
@@ -249,7 +294,7 @@ class VisaAppointmentClient:
             name: ("<redacted>" if name.lower() in SENSITIVE_RESPONSE_HEADERS else value)
             for name, value in response.headers.items()
         }
-        cookie_names = [cookie.name for cookie in self.session.cookies]
+        cookie_names = [cookie.name for cookie in getattr(self.session, "cookies", [])]
         snippet = response.text[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
         LOGGER.error("LOGIN failed with status %s", response.status_code)
         LOGGER.error("LOGIN response headers: %s", safe_headers)
@@ -282,8 +327,8 @@ class VisaAppointmentClient:
 
         response = self._post_first_month(request)
         if response.status_code in {401, 403}:
-            LOGGER.warning("FIRST_MONTH request was unauthorized; attempting one fresh login")
-            self.login()
+            LOGGER.warning("FIRST_MONTH request was unauthorized; attempting token refresh")
+            self.refresh_or_login()
             response = self._post_first_month(request)
 
         self.update_tokens_from_response(response)
@@ -297,8 +342,8 @@ class VisaAppointmentClient:
 
         response = self._post_slots(request, from_date, to_date)
         if response.status_code in {401, 403}:
-            LOGGER.warning("SLOTS request was unauthorized; attempting one fresh login")
-            self.login()
+            LOGGER.warning("SLOTS request was unauthorized; attempting token refresh")
+            self.refresh_or_login()
             response = self._post_slots(request, from_date, to_date)
 
         self.update_tokens_from_response(response)
@@ -307,44 +352,38 @@ class VisaAppointmentClient:
         response.raise_for_status()
         return response.json()
 
-    def get_user(self) -> Any:
-        self.ensure_authorized("GET_USER")
-
-        response = self._get_user()
-        if response.status_code in {401, 403}:
-            LOGGER.warning("GET_USER request was unauthorized; attempting one fresh login")
-            self.login()
-            response = self._get_user()
-
-        self.update_tokens_from_response(response)
-        if response.status_code >= 400:
-            self.log_api_failure("GET_USER", response)
-        response.raise_for_status()
-        return response.json()
-
     def ensure_authorized(self, label: str) -> None:
         if not self.has_authorization_token():
-            self.login()
+            LOGGER.info("No configured authorization token; attempting refresh")
+            self.refresh_or_login()
         elif self.is_authorization_token_expired():
-            LOGGER.info("Configured authorization token is expired or near expiry; logging in")
-            self.login()
+            LOGGER.info("Configured authorization token is expired or near expiry; attempting refresh")
+            self.refresh_or_login()
         else:
             LOGGER.info("Using configured authorization token for %s request", label)
+
+    def refresh_or_login(self) -> None:
+        if self.refresh_authorization_token():
+            return
+
+        LOGGER.info("Falling back to full login")
+        self.login()
 
     def log_api_failure(self, label: str, response: requests.Response) -> None:
         safe_headers = {
             name: ("<redacted>" if name.lower() in SENSITIVE_RESPONSE_HEADERS else value)
             for name, value in response.headers.items()
         }
+        request = getattr(response, "request", None)
         request_headers = {
             name: ("<redacted>" if name.lower() in SENSITIVE_RESPONSE_HEADERS else value)
-            for name, value in response.request.headers.items()
+            for name, value in getattr(request, "headers", {}).items()
         }
-        request_body = response.request.body or ""
+        request_body = getattr(request, "body", "") or ""
         if isinstance(request_body, bytes):
             request_body = request_body.decode("utf-8", errors="replace")
-        cookie_names = [cookie.name for cookie in self.session.cookies]
-        snippet = response.text[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
+        cookie_names = [cookie.name for cookie in getattr(self.session, "cookies", [])]
+        snippet = getattr(response, "text", "")[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
         LOGGER.error("%s failed with status %s", label, response.status_code)
         LOGGER.error("%s request headers: %s", label, request_headers)
         LOGGER.error("%s request body: %s", label, str(request_body)[:MAX_RESPONSE_SNIPPET_LENGTH])
@@ -362,13 +401,6 @@ class VisaAppointmentClient:
             timeout=self.timeout_seconds,
         )
 
-    def _authorized_get(self, url: str) -> requests.Response:
-        return self.session.get(
-            url,
-            headers=self._get_user_headers(),
-            timeout=self.timeout_seconds,
-        )
-
     def _authorized_headers(self) -> dict[str, str]:
         headers = {
             **SLOT_HEADERS,
@@ -378,18 +410,11 @@ class VisaAppointmentClient:
         }
         return headers
 
-    def _get_user_headers(self) -> dict[str, str]:
-        headers = {
-            name: value
-            for name, value in self._authorized_headers().items()
-            if name not in GET_USER_OMITTED_HEADERS
+    def _refresh_headers(self) -> dict[str, str]:
+        return {
+            **REFRESH_HEADERS,
+            "Referer": self.slot_referer,
         }
-        headers["host"] = "www.usvisaappt.com"
-        headers["X-Correlation-key"] = headers.pop("x-correlation-key")
-        return headers
-
-    def _get_user(self) -> requests.Response:
-        return self._authorized_get(GET_USER_URL)
 
     def _post_first_month(self, request: SlotRequest) -> requests.Response:
         return self._authorized_post(FIRST_MONTH_URL, request.as_first_month_json())

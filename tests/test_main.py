@@ -8,10 +8,6 @@ class FakeClient:
     def __init__(self) -> None:
         self.calls = []
 
-    def get_user(self):
-        self.calls.append("GET_USER")
-        return {"user": "ok"}
-
     def get_first_available_month(self, request):
         self.calls.append("FIRST_MONTH")
         return {
@@ -55,7 +51,7 @@ class MainWorkflowTests(unittest.TestCase):
             ("2026-08-19", "2026-08-31"),
         )
 
-    def test_poll_once_gets_user_before_first_month(self) -> None:
+    def test_poll_once_starts_with_first_month(self) -> None:
         client = FakeClient()
         notifier = FakeNotifier()
 
@@ -63,7 +59,7 @@ class MainWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             client.calls,
-            ["GET_USER", "FIRST_MONTH", ("SLOTS", "2026-08-19", "2026-08-31")],
+            ["FIRST_MONTH", ("SLOTS", "2026-08-19", "2026-08-31")],
         )
         self.assertEqual(len(notifier.messages), 1)
 
