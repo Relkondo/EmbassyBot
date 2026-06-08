@@ -29,6 +29,14 @@ class FakeSession:
         self.requests.append({"url": url, **kwargs})
         return self.responses.pop(0)
 
+    def put(self, url, **kwargs):
+        self.requests.append({"url": url, **kwargs})
+        return self.responses.pop(0)
+
+    def request(self, method, url, **kwargs):
+        self.requests.append({"method": method, "url": url, **kwargs})
+        return self.responses.pop(0)
+
     def get(self, url, **kwargs):
         self.requests.append({"url": url, **kwargs})
         return self.responses.pop(0)
@@ -79,6 +87,46 @@ class ClientTests(unittest.TestCase):
                 "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot"
                 "?type=POST&appUUID=app-uuid&applicantId=applicant&ofcAppointmentDate="
             ),
+        )
+
+    def test_slot_request_builds_slot_time_payload(self) -> None:
+        self.assertEqual(
+            slot_request().as_slot_time_json("2026-06-07", "2026-08-31", "2026-08-20"),
+            {
+                "applicantId": "applicant",
+                "applicationId": "application",
+                "fromDate": "2026-06-07",
+                "postUserId": 481,
+                "slotDate": "2026-08-20",
+                "toDate": "2026-08-31",
+                "visaClass": "H1B",
+                "visaType": "NIV",
+            },
+        )
+
+    def test_slot_request_builds_reschedule_payload(self) -> None:
+        self.assertEqual(
+            slot_request().as_reschedule_json(
+                2484255,
+                "slot-id",
+                "2026-08-20T00:00:00.000+00:00",
+                "8:30 AM",
+            ),
+            [
+                {
+                    "appointmentId": 2484255,
+                    "applicantUUID": None,
+                    "appointmentLocationType": "POST",
+                    "appointmentStatus": "SCHEDULED",
+                    "slotId": "slot-id",
+                    "appointmentDt": "2026-08-20T00:00:00.000+00:00",
+                    "appointmentTime": "8:30 AM",
+                    "postUserId": 481,
+                    "applicantId": "applicant",
+                    "applicationId": "application",
+                    "rescheduleType": "POST",
+                }
+            ],
         )
 
     def test_stored_authorization_token_skips_login(self) -> None:
@@ -373,6 +421,80 @@ class ClientTests(unittest.TestCase):
             (
                 '{"postUserId":481,"applicantId":"applicant","visaType":"NIV",'
                 '"visaClass":"H1B","locationType":"POST","applicationId":"application"}'
+            ),
+        )
+
+    def test_get_slot_times_uses_compact_json_body(self) -> None:
+        session = FakeSession([FakeResponse(payload=[])])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
+            session=session,
+        )
+
+        client.get_slot_times(slot_request(), "2026-06-07", "2026-08-31", "2026-08-20")
+
+        self.assertIn("/getSlotTime", session.requests[0]["url"])
+        self.assertEqual(
+            session.requests[0]["data"],
+            (
+                '{"applicantId":"applicant","applicationId":"application","fromDate":"2026-06-07",'
+                '"postUserId":481,"slotDate":"2026-08-20","toDate":"2026-08-31",'
+                '"visaClass":"H1B","visaType":"NIV"}'
+            ),
+        )
+
+    def test_get_landing_page_details_uses_authorized_get(self) -> None:
+        session = FakeSession([FakeResponse(payload=[])])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
+            session=session,
+        )
+
+        client.get_landing_page_details()
+
+        self.assertIn("/getLandingPageDeatils", session.requests[0]["url"])
+        self.assertEqual(session.requests[0]["headers"]["Authorization"], client.authorization_token)
+
+    def test_reschedule_appointment_uses_put_and_compact_json_body(self) -> None:
+        session = FakeSession([FakeResponse(payload=[])])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(int(time.time()) + 3600),
+            session=session,
+        )
+
+        client.reschedule_appointment(
+            slot_request(),
+            2484255,
+            "slot-id",
+            "2026-08-20T00:00:00.000+00:00",
+            "8:30 AM",
+        )
+
+        self.assertEqual(session.requests[0]["method"], "PUT")
+        self.assertIn("/appointments/reschedule", session.requests[0]["url"])
+        self.assertEqual(
+            session.requests[0]["data"],
+            (
+                '[{"appointmentId":2484255,"applicantUUID":null,'
+                '"appointmentLocationType":"POST","appointmentStatus":"SCHEDULED",'
+                '"slotId":"slot-id","appointmentDt":"2026-08-20T00:00:00.000+00:00",'
+                '"appointmentTime":"8:30 AM","postUserId":481,"applicantId":"applicant",'
+                '"applicationId":"application","rescheduleType":"POST"}]'
             ),
         )
 

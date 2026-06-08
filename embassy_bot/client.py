@@ -32,6 +32,11 @@ FIRST_MONTH_URL = (
     "https://www.usvisaappt.com/visaadministrationapi/v1/modifyslot/getFirstAvailableMonth"
 )
 SLOT_URL = "https://www.usvisaappt.com/visaadministrationapi/v1/modifyslot/getSlotDates"
+GET_TIME_URL = "https://www.usvisaappt.com/visaadministrationapi/v1/modifyslot/getSlotTime"
+RESCHEDULE_URL = "https://www.usvisaappt.com/visaappointmentapi/appointments/reschedule"
+LANDING_PAGE_DETAILS_URL = (
+    "https://www.usvisaappt.com/visaappointmentapi/appointments/getLandingPageDeatils"
+)
 ORIGIN = "https://www.usvisaappt.com"
 
 USER_AGENT = (
@@ -141,6 +146,41 @@ class SlotRequest:
             "toDate": to_date,
             **self.as_first_month_json(),
         }
+
+    def as_slot_time_json(self, from_date: str, to_date: str, slot_date: str) -> dict[str, Any]:
+        return {
+            "applicantId": self.applicant_id,
+            "applicationId": self.application_id,
+            "fromDate": from_date,
+            "postUserId": self.post_user_id,
+            "slotDate": slot_date,
+            "toDate": to_date,
+            "visaClass": self.visa_class,
+            "visaType": self.visa_type,
+        }
+
+    def as_reschedule_json(
+        self,
+        appointment_id: int,
+        slot_id: str,
+        appointment_date: str,
+        appointment_time: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "appointmentId": appointment_id,
+                "applicantUUID": None,
+                "appointmentLocationType": self.location_type,
+                "appointmentStatus": "SCHEDULED",
+                "slotId": slot_id,
+                "appointmentDt": appointment_date,
+                "appointmentTime": appointment_time,
+                "postUserId": self.post_user_id,
+                "applicantId": self.applicant_id,
+                "applicationId": self.application_id,
+                "rescheduleType": self.location_type,
+            }
+        ]
 
 
 class VisaAppointmentClient:
@@ -352,6 +392,76 @@ class VisaAppointmentClient:
         response.raise_for_status()
         return response.json()
 
+    def get_slot_times(
+        self,
+        request: SlotRequest,
+        from_date: str,
+        to_date: str,
+        slot_date: str,
+    ) -> Any:
+        self.ensure_authorized("GET_TIME")
+
+        response = self._post_slot_times(request, from_date, to_date, slot_date)
+        if response.status_code in {401, 403}:
+            LOGGER.warning("GET_TIME request was unauthorized; attempting token refresh")
+            self.refresh_or_login()
+            response = self._post_slot_times(request, from_date, to_date, slot_date)
+
+        self.update_tokens_from_response(response)
+        if response.status_code >= 400:
+            self.log_api_failure("GET_TIME", response)
+        response.raise_for_status()
+        return response.json()
+
+    def get_landing_page_details(self) -> Any:
+        self.ensure_authorized("GET_LANDING_PAGE_DETAILS")
+
+        response = self._get_landing_page_details()
+        if response.status_code in {401, 403}:
+            LOGGER.warning("GET_LANDING_PAGE_DETAILS request was unauthorized; attempting token refresh")
+            self.refresh_or_login()
+            response = self._get_landing_page_details()
+
+        self.update_tokens_from_response(response)
+        if response.status_code >= 400:
+            self.log_api_failure("GET_LANDING_PAGE_DETAILS", response)
+        response.raise_for_status()
+        return response.json()
+
+    def reschedule_appointment(
+        self,
+        request: SlotRequest,
+        appointment_id: int,
+        slot_id: str,
+        appointment_date: str,
+        appointment_time: str,
+    ) -> Any:
+        self.ensure_authorized("BOOKING")
+
+        response = self._put_reschedule(
+            request,
+            appointment_id,
+            slot_id,
+            appointment_date,
+            appointment_time,
+        )
+        if response.status_code in {401, 403}:
+            LOGGER.warning("BOOKING request was unauthorized; attempting token refresh")
+            self.refresh_or_login()
+            response = self._put_reschedule(
+                request,
+                appointment_id,
+                slot_id,
+                appointment_date,
+                appointment_time,
+            )
+
+        self.update_tokens_from_response(response)
+        if response.status_code >= 400:
+            self.log_api_failure("BOOKING", response)
+        response.raise_for_status()
+        return response.json()
+
     def ensure_authorized(self, label: str) -> None:
         if not self.has_authorization_token():
             LOGGER.info("No configured authorization token; attempting refresh")
@@ -392,9 +502,23 @@ class VisaAppointmentClient:
         LOGGER.error("%s response body snippet: %s", label, snippet)
 
     def _authorized_post(self, url: str, body_json: dict[str, Any]) -> requests.Response:
+        return self._authorized_request("POST", url, body_json)
+
+    def _authorized_put(self, url: str, body_json: Any) -> requests.Response:
+        return self._authorized_request("PUT", url, body_json)
+
+    def _authorized_get(self, url: str) -> requests.Response:
+        return self.session.get(
+            url,
+            headers=self._authorized_headers(),
+            timeout=self.timeout_seconds,
+        )
+
+    def _authorized_request(self, method: str, url: str, body_json: Any) -> requests.Response:
         headers = self._authorized_headers()
         body = json.dumps(body_json, separators=(",", ":"))
-        return self.session.post(
+        return self.session.request(
+            method,
             url,
             headers=headers,
             data=body,
@@ -421,6 +545,39 @@ class VisaAppointmentClient:
 
     def _post_slots(self, request: SlotRequest, from_date: str, to_date: str) -> requests.Response:
         return self._authorized_post(SLOT_URL, request.as_slot_json(from_date, to_date))
+
+    def _post_slot_times(
+        self,
+        request: SlotRequest,
+        from_date: str,
+        to_date: str,
+        slot_date: str,
+    ) -> requests.Response:
+        return self._authorized_post(
+            GET_TIME_URL,
+            request.as_slot_time_json(from_date, to_date, slot_date),
+        )
+
+    def _get_landing_page_details(self) -> requests.Response:
+        return self._authorized_get(LANDING_PAGE_DETAILS_URL)
+
+    def _put_reschedule(
+        self,
+        request: SlotRequest,
+        appointment_id: int,
+        slot_id: str,
+        appointment_date: str,
+        appointment_time: str,
+    ) -> requests.Response:
+        return self._authorized_put(
+            RESCHEDULE_URL,
+            request.as_reschedule_json(
+                appointment_id,
+                slot_id,
+                appointment_date,
+                appointment_time,
+            ),
+        )
 
     @staticmethod
     def generate_correlation_key(length: int = 15) -> str:

@@ -13,20 +13,12 @@ RELOAD_BASE_64 = ""
 AUTHORIZATION_TOKEN = ""
 REFRESH_TOKEN = ""
 
-APPLICANT_ID = ""
+# Optional selector. Leave empty to use the most recently created application.
 APPLICATION_ID = ""
-APP_UUID = ""
-POST_USER_ID = 0
-VISA_TYPE = "NIV"
-VISA_CLASS = "H1B"
-LOCATION_TYPE = "POST"
 
-# Optional browser-equivalent headers for SLOTS debugging. Leave empty unless
-# you capture these values from the real browser request.
-SLOT_REFERER = ""
-X_CORRELATION_KEY = ""
-
-ALERT_DATE_LIMIT = "2026-08-06"
+# Leave empty to disable automatic booking. When set, slots strictly before
+# this date are automatically booked after GET_TIME returns a slotId.
+BOOKING_DATE_LIMIT = ""
 
 POLL_INTERVAL_SECONDS = 60
 REQUEST_TIMEOUT_SECONDS = 30

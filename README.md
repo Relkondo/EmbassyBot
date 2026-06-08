@@ -26,19 +26,30 @@ Fill `config.py` before running. The most important fields are:
 - `CAPSOLVER_API_KEY`, `CAPTCHA_URL`, `CAPTCHA_KEY`
 - `ANCHOR_BASE_64`, `RELOAD_BASE_64` if CapSolver needs anchor/reload payloads
 - `AUTHORIZATION_TOKEN`, `REFRESH_TOKEN`
-- `APPLICANT_ID`, `APPLICATION_ID`, `APP_UUID`, `POST_USER_ID`
-- `ALERT_DATE_LIMIT`
+- `APPLICATION_ID` as an optional selector if multiple applications exist
+- `BOOKING_DATE_LIMIT`
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
-`ALERT_DATE_LIMIT` is treated as inclusive. If FIRST_MONTH returns a date on or
-before that value, the bot requests that month of SLOTS and sends the returned
-dates to Telegram.
+After authentication, the bot calls GET_LANDING_PAGE_DETAILS and extracts the
+current appointment, applicant, visa, post, and alert date values from the
+selected application. If `APPLICATION_ID` is empty, the most recently created
+application is selected.
 
-If `AUTHORIZATION_TOKEN` is set, the bot tries the slot request first and skips
-login. If the token is missing, or if the slot request returns `401` or `403`,
-it logs in once and rewrites `AUTHORIZATION_TOKEN` and `REFRESH_TOKEN` in
-`config.py`. `REFRESH_TOKEN` is persisted for future refresh-token support, but
-the current slot request does not use it.
+The current appointment date from GET_LANDING_PAGE_DETAILS is treated as the
+alert date limit. If FIRST_MONTH returns a date on or before that value, the bot
+requests that month of SLOTS. When the earliest SLOTS date is also on or before
+the alert limit, the bot requests GET_TIME for that date and sends the returned
+appointment start times to Telegram.
+
+`BOOKING_DATE_LIMIT` is optional. Leave it empty to disable automatic booking.
+When set, any GET_TIME slot strictly before that date is booked with the
+appointmentId from GET_LANDING_PAGE_DETAILS, and the Telegram message reports
+the booked time.
+
+If `AUTHORIZATION_TOKEN` is set, the bot uses it until it is within five minutes
+of expiry. When possible, it refreshes the token with `REFRESH_TOKEN` before
+falling back to full login and CAPTCHA. Fresh `AUTHORIZATION_TOKEN` and
+`REFRESH_TOKEN` values are persisted back to `config.py`.
 
 ## EC2 / systemd
 
