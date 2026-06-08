@@ -11,6 +11,12 @@ On each login attempt, the bot requests a fresh CAPTCHA token through CapSolver.
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+cp config.example.py config.py
+```
+
+Fill `config.py` before running, then start the bot:
+
+```bash
 python -m embassy_bot.main
 ```
 
@@ -20,7 +26,9 @@ For repeated one-shot testing, run:
 python -m embassy_bot.main --once
 ```
 
-Fill `config.py` before running. The most important fields are:
+To force a fresh login during a one-shot test, add `--force-login`.
+
+The most important config fields are:
 
 - `USERNAME`, `PASSWORD`
 - `CAPSOLVER_API_KEY`, `CAPTCHA_URL`, `CAPTCHA_KEY`
@@ -31,6 +39,11 @@ Fill `config.py` before running. The most important fields are:
 - `STATE_FILE`
 - `BASE_INTERVAL_SECONDS`, `JITTER_SECONDS`
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+
+`ANCHOR_BASE_64_FILE` and `RELOAD_BASE_64_FILE` are optional file paths for the
+long CapSolver payload captures. Relative paths are resolved next to
+`config.py`; the current project defaults use `assets/anchor_base64.txt` and
+`assets/reload_base64.txt`.
 
 After authentication, the bot calls GET_LANDING_PAGE_DETAILS and extracts the
 current appointment, applicant, visa, post, and alert date values from the
@@ -61,6 +74,11 @@ where the server closes the connection without a response, the bot suppresses
 Telegram notification and waits eight minutes before retrying. When a deeper
 availability chain is needed, it also waits a random one to four seconds between
 `FIRST_MONTH`, `SLOTS`, `GET_TIME`, and booking calls.
+
+If the login response says access is temporarily restricted, the bot exits
+instead of continuing to retry. The provided systemd service uses
+`Restart=on-failure`, so this intentional clean exit is not restarted
+automatically.
 
 If `AUTHORIZATION_TOKEN` is set, the bot uses it until it is within five minutes
 of expiry, which is roughly 55 minutes after login for the current site tokens.
