@@ -18,9 +18,46 @@ def format_time_message(start_times: list[datetime]) -> str:
 
 
 def format_booking_message(start_time: datetime, response_message: str | None = None) -> str:
-    message = f"US visa appointment booked: {format_start_time(start_time)}"
+    message = f"US visa appointment booking succeeded: {format_start_time(start_time)}"
     if response_message:
         message = f"{message}\n{response_message}"
+    return message
+
+
+def format_booking_failure_message(
+    start_time: datetime,
+    error_message: str,
+    status_code: int | None = None,
+    response_body: str | None = None,
+) -> str:
+    return (
+        f"US visa appointment booking failed: {format_start_time(start_time)}\n"
+        f"Call: BOOKING\n"
+        f"{format_failure_details(status_code, error_message, response_body)}"
+    )
+
+
+def format_call_failure_message(
+    call_name: str,
+    status_code: int | None,
+    error_message: str,
+    response_body: str | None = None,
+) -> str:
+    return (
+        f"US visa appointment polling call failed: {call_name}\n"
+        f"{format_failure_details(status_code, error_message, response_body)}"
+    )
+
+
+def format_failure_details(
+    status_code: int | None,
+    error_message: str,
+    response_body: str | None = None,
+) -> str:
+    status = str(status_code) if status_code is not None else "unavailable"
+    message = f"Status: {status}\nMessage: {error_message or '<empty>'}"
+    if response_body:
+        message = f"{message}\nBody: {response_body}"
     return message
 
 

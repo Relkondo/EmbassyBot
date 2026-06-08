@@ -9,15 +9,18 @@ from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from threading import Event
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import config
 from embassy_bot.client import SlotRequest, VisaAppointmentClient
+from embassy_bot import client as client_module
 from embassy_bot.config_store import persist_tokens_to_config
 from embassy_bot.notifier import (
     TelegramNotifier,
     format_appointment_time,
+    format_booking_failure_message,
     format_booking_message,
+    format_call_failure_message,
     format_time_message,
 )
 from embassy_bot.slots import SlotTime, find_available_dates, find_slot_times
@@ -25,6 +28,17 @@ from embassy_bot.slots import SlotTime, find_available_dates, find_slot_times
 
 LOGGER = logging.getLogger("embassy_bot")
 STOP_EVENT = Event()
+MAX_TELEGRAM_FAILURE_BODY_LENGTH = 1000
+T = TypeVar("T")
+URL_FAILURE_LABELS = {
+    client_module.LOGIN_URL: "LOGIN",
+    client_module.REFRESH_TOKEN_URL: "REFRESH_TOKEN",
+    client_module.LANDING_PAGE_DETAILS_URL: "GET_LANDING_PAGE_DETAILS",
+    client_module.FIRST_MONTH_URL: "FIRST_MONTH",
+    client_module.SLOT_URL: "SLOTS",
+    client_module.GET_TIME_URL: "GET_TIME",
+    client_module.RESCHEDULE_URL: "BOOKING",
+}
 
 
 @dataclass(frozen=True)
@@ -32,6 +46,13 @@ class AppointmentContext:
     slot_request: SlotRequest
     appointment_id: int
     alert_date_limit: date
+
+
+@dataclass(frozen=True)
+class FailureDetails:
+    status_code: int | None
+    message: str
+    response_body: str | None
 
 
 def _request_stop(signum: int, _frame: object) -> None:
@@ -123,8 +144,17 @@ def poll_once(
     booking_date_limit: date | None,
     notifier: TelegramNotifier,
     notified_dates: set[date],
+    failed_call_names: set[str] | None = None,
 ) -> None:
-    landing_payload = client.get_landing_page_details()
+    if failed_call_names is None:
+        failed_call_names = set()
+
+    landing_payload = call_or_notify(
+        "GET_LANDING_PAGE_DETAILS",
+        notifier,
+        failed_call_names,
+        client.get_landing_page_details,
+    )
     LOGGER.info("GET_LANDING_PAGE_DETAILS response payload: %s", json.dumps(landing_payload, default=str))
     appointment_context = build_appointment_context(landing_payload, configured_application_id)
     slot_request = appointment_context.slot_request
@@ -132,7 +162,12 @@ def poll_once(
     appointment_id = appointment_context.appointment_id
     client.slot_referer = slot_request.as_referer()
 
-    first_month_payload = client.get_first_available_month(slot_request)
+    first_month_payload = call_or_notify(
+        "FIRST_MONTH",
+        notifier,
+        failed_call_names,
+        lambda: client.get_first_available_month(slot_request),
+    )
     LOGGER.info("FIRST_MONTH response payload: %s", json.dumps(first_month_payload, default=str))
     first_month_date = parse_first_month_date(first_month_payload)
     if not first_month_date:
@@ -148,7 +183,12 @@ def poll_once(
         return
 
     from_date, to_date = slot_window_for_first_month(first_month_date)
-    payload = client.get_slot_dates(slot_request, from_date, to_date)
+    payload = call_or_notify(
+        "SLOTS",
+        notifier,
+        failed_call_names,
+        lambda: client.get_slot_dates(slot_request, from_date, to_date),
+    )
     LOGGER.info("SLOTS response payload: %s", json.dumps(payload, default=str))
     dates = find_available_dates(payload, date.max)
     if not dates:
@@ -170,11 +210,16 @@ def poll_once(
 
     today = date.today()
     time_to_date = month_end(earliest_date)
-    time_payload = client.get_slot_times(
-        slot_request,
-        today.isoformat(),
-        time_to_date.isoformat(),
-        earliest_date.isoformat(),
+    time_payload = call_or_notify(
+        "GET_TIME",
+        notifier,
+        failed_call_names,
+        lambda: client.get_slot_times(
+            slot_request,
+            today.isoformat(),
+            time_to_date.isoformat(),
+            earliest_date.isoformat(),
+        ),
     )
     LOGGER.info("GET_TIME response payload: %s", json.dumps(time_payload, default=str))
     slot_times = find_slot_times(time_payload)
@@ -185,18 +230,36 @@ def poll_once(
         if booking_slot:
             if appointment_id is None:
                 raise ValueError("GET_LANDING_PAGE_DETAILS must return appointmentId before booking")
-            booking_payload = client.reschedule_appointment(
-                slot_request,
-                appointment_id,
-                booking_slot.slot_id,
-                slot_date_to_api_datetime(booking_slot),
-                format_appointment_time(booking_slot.start_time),
-            )
-            LOGGER.info("BOOKING response payload: %s", json.dumps(booking_payload, default=str))
-            message = format_booking_message(
-                booking_slot.start_time,
-                find_response_message(booking_payload),
-            )
+            try:
+                booking_payload = client.reschedule_appointment(
+                    slot_request,
+                    appointment_id,
+                    booking_slot.slot_id,
+                    slot_date_to_api_datetime(booking_slot),
+                    format_appointment_time(booking_slot.start_time),
+                )
+            except Exception as exc:
+                LOGGER.exception("BOOKING attempt failed")
+                failure = extract_failure_details(exc)
+                if "BOOKING" in failed_call_names:
+                    return
+                failed_call_names.add("BOOKING")
+                notifier.send(
+                    format_booking_failure_message(
+                        booking_slot.start_time,
+                        failure.message,
+                        failure.status_code,
+                        failure.response_body,
+                    )
+                )
+                return
+            else:
+                failed_call_names.discard("BOOKING")
+                LOGGER.info("BOOKING response payload: %s", json.dumps(booking_payload, default=str))
+                message = format_booking_message(
+                    booking_slot.start_time,
+                    find_response_message(booking_payload),
+                )
         else:
             message = format_time_message(start_times)
         notifier.send(message)
@@ -204,6 +267,63 @@ def poll_once(
         LOGGER.info("Found and notified for dates: %s", message)
     else:
         LOGGER.info("No appointment start times returned by GET_TIME")
+
+
+def call_or_notify(
+    call_name: str,
+    notifier: TelegramNotifier,
+    failed_call_names: set[str],
+    callback: Callable[[], T],
+) -> T:
+    try:
+        result = callback()
+    except Exception as exc:
+        failed_call_name = infer_failed_call_name(call_name, exc)
+        failure = extract_failure_details(exc)
+        if failed_call_name not in failed_call_names:
+            notifier.send(
+                format_call_failure_message(
+                    failed_call_name,
+                    failure.status_code,
+                    failure.message,
+                    failure.response_body,
+                )
+            )
+            failed_call_names.add(failed_call_name)
+        raise
+    else:
+        failed_call_names.discard(call_name)
+        failed_call_names.discard("LOGIN")
+        failed_call_names.discard("REFRESH_TOKEN")
+        return result
+
+
+def extract_failure_details(exc: Exception) -> FailureDetails:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    reason = getattr(response, "reason", None)
+    message = str(exc) or (str(reason) if reason else exc.__class__.__name__)
+    response_body = getattr(response, "text", None)
+    if isinstance(response_body, str):
+        response_body = response_body[:MAX_TELEGRAM_FAILURE_BODY_LENGTH].replace("\n", "\\n")
+    else:
+        response_body = None
+    return FailureDetails(
+        status_code=status_code if isinstance(status_code, int) else None,
+        message=message,
+        response_body=response_body,
+    )
+
+
+def infer_failed_call_name(default_call_name: str, exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    request = getattr(response, "request", None)
+    url = getattr(request, "url", "")
+    if isinstance(url, str):
+        for known_url, label in URL_FAILURE_LABELS.items():
+            if url.startswith(known_url):
+                return label
+    return default_call_name
 
 
 def first_bookable_slot(
@@ -364,6 +484,7 @@ def run_once(force_login: bool = False) -> None:
         booking_date_limit,
         notifier,
         set(),
+        set(),
     )
 
 
@@ -371,6 +492,7 @@ def run_forever() -> None:
     configure_logging()
     configured_application_id, booking_date_limit, client, notifier = build_runtime()
     notified_dates: set[date] = set()
+    failed_call_names: set[str] = set()
 
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
@@ -385,6 +507,7 @@ def run_forever() -> None:
                 booking_date_limit,
                 notifier,
                 notified_dates,
+                failed_call_names,
             )
         except Exception:
             LOGGER.exception("Polling attempt failed")

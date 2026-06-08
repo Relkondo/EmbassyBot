@@ -1,6 +1,8 @@
 import unittest
 from datetime import date
+from types import SimpleNamespace
 
+from embassy_bot import client as client_module
 from embassy_bot.main import (
     build_appointment_context,
     parse_first_month_date,
@@ -10,8 +12,9 @@ from embassy_bot.main import (
 
 
 class FakeClient:
-    def __init__(self) -> None:
+    def __init__(self, booking_error: Exception | None = None) -> None:
         self.calls = []
+        self.booking_error = booking_error
 
     def get_landing_page_details(self):
         self.calls.append("GET_LANDING_PAGE_DETAILS")
@@ -54,6 +57,8 @@ class FakeClient:
         self.calls.append(
             ("BOOKING", appointment_id, slot_id, appointment_date, appointment_time)
         )
+        if self.booking_error:
+            raise self.booking_error
         return [
             {
                 "responseMsg": (
@@ -62,6 +67,39 @@ class FakeClient:
                 )
             }
         ]
+
+
+class FakeHttpError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        status_code: int,
+        body: str,
+        url: str = "https://www.usvisaappt.com/visaadministrationapi/v1/modifyslot/getSlotDates",
+    ) -> None:
+        super().__init__(message)
+        self.response = SimpleNamespace(
+            status_code=status_code,
+            text=body,
+            request=SimpleNamespace(url=url),
+        )
+
+
+class FailingSlotsClient(FakeClient):
+    def get_slot_dates(self, request, from_date, to_date):
+        self.calls.append(("SLOTS", from_date, to_date))
+        raise FakeHttpError("500 Server Error", 500, '{"message":"slot server error"}')
+
+
+class FailingLoginClient(FakeClient):
+    def get_landing_page_details(self):
+        self.calls.append("GET_LANDING_PAGE_DETAILS")
+        raise FakeHttpError(
+            "401 Client Error",
+            401,
+            '{"message":"login failed"}',
+            client_module.LOGIN_URL,
+        )
 
 
 class FakeNotifier:
@@ -147,9 +185,135 @@ class MainWorkflowTests(unittest.TestCase):
         self.assertEqual(
             notifier.messages[0],
             (
-                "US visa appointment booked: August 20, 2026 at 8:30 AM UTC\n"
+                "US visa appointment booking succeeded: August 20, 2026 at 8:30 AM UTC\n"
                 "You have made 1 successful reschedule and 9 more reschedule options "
                 "are available."
+            ),
+        )
+
+    def test_poll_once_notifies_when_booking_fails(self) -> None:
+        client = FakeClient(booking_error=RuntimeError("booking exploded"))
+        notifier = FakeNotifier()
+
+        poll_once(
+            client,
+            "application",
+            date(2026, 8, 21),
+            notifier,
+            set(),
+        )
+
+        self.assertEqual(
+            notifier.messages[0],
+            (
+                "US visa appointment booking failed: August 20, 2026 at 8:30 AM UTC\n"
+                "Call: BOOKING\n"
+                "Status: unavailable\n"
+                "Message: booking exploded"
+            ),
+        )
+
+    def test_poll_once_notifies_when_api_call_fails(self) -> None:
+        client = FailingSlotsClient()
+        notifier = FakeNotifier()
+
+        with self.assertRaises(FakeHttpError):
+            poll_once(
+                client,
+                "application",
+                None,
+                notifier,
+                set(),
+            )
+
+        self.assertEqual(
+            notifier.messages,
+            [
+                (
+                    "US visa appointment polling call failed: SLOTS\n"
+                    "Status: 500\n"
+                    "Message: 500 Server Error\n"
+                    'Body: {"message":"slot server error"}'
+                )
+            ],
+        )
+
+    def test_poll_once_reports_login_failure_label(self) -> None:
+        client = FailingLoginClient()
+        notifier = FakeNotifier()
+
+        with self.assertRaises(FakeHttpError):
+            poll_once(
+                client,
+                "application",
+                None,
+                notifier,
+                set(),
+            )
+
+        self.assertEqual(
+            notifier.messages,
+            [
+                (
+                    "US visa appointment polling call failed: LOGIN\n"
+                    "Status: 401\n"
+                    "Message: 401 Client Error\n"
+                    'Body: {"message":"login failed"}'
+                )
+            ],
+        )
+
+    def test_poll_once_suppresses_repeated_call_failures_until_success(self) -> None:
+        notifier = FakeNotifier()
+        failed_call_names = set()
+
+        with self.assertRaises(FakeHttpError):
+            poll_once(
+                FailingSlotsClient(),
+                "application",
+                None,
+                notifier,
+                set(),
+                failed_call_names,
+            )
+        with self.assertRaises(FakeHttpError):
+            poll_once(
+                FailingSlotsClient(),
+                "application",
+                None,
+                notifier,
+                set(),
+                failed_call_names,
+            )
+
+        self.assertEqual(len(notifier.messages), 1)
+
+        poll_once(
+            FakeClient(),
+            "application",
+            None,
+            notifier,
+            set(),
+            failed_call_names,
+        )
+        with self.assertRaises(FakeHttpError):
+            poll_once(
+                FailingSlotsClient(),
+                "application",
+                None,
+                notifier,
+                set(),
+                failed_call_names,
+            )
+
+        self.assertEqual(len(notifier.messages), 3)
+        self.assertEqual(
+            notifier.messages[-1],
+            (
+                "US visa appointment polling call failed: SLOTS\n"
+                "Status: 500\n"
+                "Message: 500 Server Error\n"
+                'Body: {"message":"slot server error"}'
             ),
         )
 
