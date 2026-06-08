@@ -165,13 +165,13 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(client.authorization_token.startswith("Bearer "))
         self.assertEqual(session.requests[0]["headers"]["Authorization"], client.authorization_token)
 
-    def test_token_with_less_than_five_minutes_left_is_refreshed(self) -> None:
+    def test_token_with_less_than_five_minutes_left_logs_in(self) -> None:
         session = FakeSession(
             [
+                FakeResponse(),
                 FakeResponse(
                     headers={
                         "Authorization": fake_jwt(int(time.time()) + 3600),
-                        "Refreshtoken": "refresh fresh",
                     }
                 ),
                 FakeResponse(payload={"present": False}),
@@ -184,23 +184,23 @@ class ClientTests(unittest.TestCase):
             captcha_url="captcha-url",
             captcha_key="captcha-key",
             authorization_token=fake_jwt(int(time.time()) + 250),
-            refresh_token="refresh stored",
             session=session,
         )
 
         client.get_first_available_month(slot_request())
 
-        self.assertEqual(client.captcha_requests, 0)
-        self.assertIn("/identity/user/refreshToken", session.requests[0]["url"])
-        self.assertIn("/getFirstAvailableMonth", session.requests[1]["url"])
+        self.assertEqual(client.captcha_requests, 1)
+        self.assertIn("/visaapplicantui", session.requests[0]["url"])
+        self.assertIn("/identity/user/login", session.requests[1]["url"])
+        self.assertIn("/getFirstAvailableMonth", session.requests[2]["url"])
 
     def test_expired_stored_authorization_token_logs_in_before_slots(self) -> None:
         session = FakeSession(
             [
+                FakeResponse(),
                 FakeResponse(
                     headers={
                         "Authorization": fake_jwt(int(time.time()) + 3600),
-                        "Refreshtoken": "refresh fresh",
                     }
                 ),
                 FakeResponse(payload=[]),
@@ -213,28 +213,24 @@ class ClientTests(unittest.TestCase):
             captcha_url="captcha-url",
             captcha_key="captcha-key",
             authorization_token=fake_jwt(int(time.time()) - 1),
-            refresh_token="refresh stored",
             session=session,
         )
 
         client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
-        self.assertEqual(client.captcha_requests, 0)
-        self.assertIn("/identity/user/refreshToken", session.requests[0]["url"])
-        self.assertEqual(
-            json.loads(session.requests[0]["data"]),
-            {"refreshToken": "refresh stored", "username": "user"},
-        )
-        self.assertIn("/getSlotDates", session.requests[1]["url"])
+        self.assertEqual(client.captcha_requests, 1)
+        self.assertIn("/visaapplicantui", session.requests[0]["url"])
+        self.assertIn("/identity/user/login", session.requests[1]["url"])
+        self.assertIn("/getSlotDates", session.requests[2]["url"])
 
-    def test_expired_token_refreshes_and_persists_new_tokens(self) -> None:
+    def test_expired_token_logs_in_and_persists_new_authorization_token(self) -> None:
         saved_tokens = []
         session = FakeSession(
             [
+                FakeResponse(),
                 FakeResponse(
                     headers={
                         "Authorization": "Bearer fresh",
-                        "Refreshtoken": "refresh fresh",
                     }
                 ),
                 FakeResponse(payload={"slots": []}),
@@ -247,80 +243,26 @@ class ClientTests(unittest.TestCase):
             captcha_url="captcha-url",
             captcha_key="captcha-key",
             authorization_token=fake_jwt(int(time.time()) - 1),
-            refresh_token="refresh expired",
-            on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
-            session=session,
-        )
-
-        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
-
-        self.assertEqual(client.captcha_requests, 0)
-        self.assertEqual(saved_tokens, [("Bearer fresh", "refresh fresh")])
-        self.assertIn("/identity/user/refreshToken", session.requests[0]["url"])
-        self.assertEqual(session.requests[-1]["headers"]["Authorization"], "Bearer fresh")
-
-    def test_refresh_failure_falls_back_to_full_login(self) -> None:
-        saved_tokens = []
-        failures = []
-        successes = []
-        session = FakeSession(
-            [
-                FakeResponse(status_code=401),
-                FakeResponse(status_code=401),
-                FakeResponse(),
-                FakeResponse(
-                    headers={
-                        "Authorization": "Bearer fresh",
-                        "Refreshtoken": "refresh fresh",
-                    }
-                ),
-                FakeResponse(payload={"slots": []}),
-            ]
-        )
-        client = TestVisaAppointmentClient(
-            username="user",
-            password="pass",
-            capsolver_api_key="api-key",
-            captcha_url="captcha-url",
-            captcha_key="captcha-key",
-            authorization_token=fake_jwt(int(time.time()) + 3600),
-            refresh_token="refresh expired",
-            on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
-            on_call_failed=failures.append,
-            on_call_succeeded=successes.append,
+            on_tokens_updated=saved_tokens.append,
             session=session,
         )
 
         client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
         self.assertEqual(client.captcha_requests, 1)
-        self.assertIn("/getSlotDates", session.requests[0]["url"])
-        self.assertIn("/identity/user/refreshToken", session.requests[1]["url"])
-        self.assertIn("/visaapplicantui", session.requests[2]["url"])
-        self.assertEqual(session.requests[3]["json"]["captchaToken"], "captcha-1")
+        self.assertEqual(saved_tokens, ["Bearer fresh"])
+        self.assertIn("/identity/user/login", session.requests[1]["url"])
         self.assertEqual(session.requests[-1]["headers"]["Authorization"], "Bearer fresh")
-        self.assertEqual(saved_tokens, [("Bearer fresh", "refresh fresh")])
-        self.assertEqual(failures[0].label, "REFRESH_TOKEN")
-        self.assertEqual(failures[0].status_code, 401)
-        self.assertIn("LOGIN", successes)
 
-    def test_unauthorized_after_successful_refresh_falls_back_to_full_login(self) -> None:
+    def test_unauthorized_request_falls_back_to_full_login(self) -> None:
         saved_tokens = []
         session = FakeSession(
             [
-                FakeResponse(status_code=401),
-                FakeResponse(
-                    headers={
-                        "Authorization": "Bearer refreshed",
-                        "Refreshtoken": "refresh refreshed",
-                    }
-                ),
                 FakeResponse(status_code=401),
                 FakeResponse(),
                 FakeResponse(
                     headers={
                         "Authorization": "Bearer login fresh",
-                        "Refreshtoken": "refresh login fresh",
                     }
                 ),
                 FakeResponse(payload={"slots": []}),
@@ -333,8 +275,7 @@ class ClientTests(unittest.TestCase):
             captcha_url="captcha-url",
             captcha_key="captcha-key",
             authorization_token=fake_jwt(int(time.time()) + 3600),
-            refresh_token="refresh stored",
-            on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
+            on_tokens_updated=saved_tokens.append,
             session=session,
         )
 
@@ -342,48 +283,11 @@ class ClientTests(unittest.TestCase):
 
         self.assertEqual(client.captcha_requests, 1)
         self.assertIn("/getSlotDates", session.requests[0]["url"])
-        self.assertIn("/identity/user/refreshToken", session.requests[1]["url"])
-        self.assertIn("/getSlotDates", session.requests[2]["url"])
-        self.assertIn("/visaapplicantui", session.requests[3]["url"])
-        self.assertIn("/identity/user/login", session.requests[4]["url"])
-        self.assertIn("/getSlotDates", session.requests[5]["url"])
-        self.assertEqual(session.requests[5]["headers"]["Authorization"], "Bearer login fresh")
-        self.assertEqual(
-            saved_tokens,
-            [
-                ("Bearer refreshed", "refresh refreshed"),
-                ("Bearer login fresh", "refresh login fresh"),
-            ],
-        )
-
-    def test_missing_authorization_token_refreshes_before_slots(self) -> None:
-        session = FakeSession(
-            [
-                FakeResponse(
-                    headers={
-                        "Authorization": "Bearer fresh",
-                        "Refreshtoken": "refresh fresh",
-                    }
-                ),
-                FakeResponse(payload={"slots": []}),
-            ]
-        )
-        client = TestVisaAppointmentClient(
-            username="user",
-            password="pass",
-            capsolver_api_key="api-key",
-            captcha_url="captcha-url",
-            captcha_key="captcha-key",
-            refresh_token="refresh stored",
-            session=session,
-        )
-
-        client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
-
-        self.assertEqual(client.captcha_requests, 0)
-        self.assertIn("/identity/user/refreshToken", session.requests[0]["url"])
-        self.assertIn("/getSlotDates", session.requests[1]["url"])
-        self.assertEqual(session.requests[1]["headers"]["Authorization"], "Bearer fresh")
+        self.assertIn("/visaapplicantui", session.requests[1]["url"])
+        self.assertIn("/identity/user/login", session.requests[2]["url"])
+        self.assertIn("/getSlotDates", session.requests[3]["url"])
+        self.assertEqual(session.requests[3]["headers"]["Authorization"], "Bearer login fresh")
+        self.assertEqual(saved_tokens, ["Bearer login fresh"])
 
     def test_missing_tokens_logs_in_before_slots(self) -> None:
         session = FakeSession(
@@ -392,7 +296,6 @@ class ClientTests(unittest.TestCase):
                 FakeResponse(
                     headers={
                         "Authorization": "Bearer fresh",
-                        "Refreshtoken": "refresh fresh",
                     }
                 ),
                 FakeResponse(payload={"slots": []}),
@@ -564,7 +467,6 @@ class ClientTests(unittest.TestCase):
                 FakeResponse(
                     headers={
                         "Authorization": "Bearer rotated",
-                        "Refreshtoken": "refresh rotated",
                     },
                     payload=[],
                 )
@@ -577,16 +479,14 @@ class ClientTests(unittest.TestCase):
             captcha_url="captcha-url",
             captcha_key="captcha-key",
             authorization_token="Bearer stored",
-            refresh_token="refresh stored",
-            on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
+            on_tokens_updated=saved_tokens.append,
             session=session,
         )
 
         client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
         self.assertEqual(client.authorization_token, "Bearer rotated")
-        self.assertEqual(client.refresh_token, "refresh rotated")
-        self.assertEqual(saved_tokens, [("Bearer rotated", "refresh rotated")])
+        self.assertEqual(saved_tokens, ["Bearer rotated"])
 
     def test_raw_response_authorization_token_gets_bearer_prefix_before_persist(self) -> None:
         saved_tokens = []
@@ -596,7 +496,6 @@ class ClientTests(unittest.TestCase):
                 FakeResponse(
                     headers={
                         "Authorization": raw_token,
-                        "Refreshtoken": "refresh rotated",
                     },
                     payload=[],
                 )
@@ -609,15 +508,14 @@ class ClientTests(unittest.TestCase):
             captcha_url="captcha-url",
             captcha_key="captcha-key",
             authorization_token="Bearer stored",
-            refresh_token="refresh stored",
-            on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
+            on_tokens_updated=saved_tokens.append,
             session=session,
         )
 
         client.get_slot_dates(slot_request(), "2026-06-07", "2026-08-05")
 
         self.assertEqual(client.authorization_token, f"Bearer {raw_token}")
-        self.assertEqual(saved_tokens, [(f"Bearer {raw_token}", "refresh rotated")])
+        self.assertEqual(saved_tokens, [f"Bearer {raw_token}"])
 
 
 if __name__ == "__main__":

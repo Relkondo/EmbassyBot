@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable, TypeVar
 
 from embassy_bot import client as client_module
-from embassy_bot.client import ClientCallFailure, SlotRequest, VisaAppointmentClient
+from embassy_bot.client import SlotRequest, VisaAppointmentClient
 from embassy_bot.notifier import (
     TelegramNotifier,
     format_appointment_time,
@@ -27,7 +27,6 @@ MAX_TELEGRAM_FAILURE_BODY_LENGTH = 1000
 T = TypeVar("T")
 URL_FAILURE_LABELS = {
     client_module.LOGIN_URL: "LOGIN",
-    client_module.REFRESH_TOKEN_URL: "REFRESH_TOKEN",
     client_module.LANDING_PAGE_DETAILS_URL: "GET_LANDING_PAGE_DETAILS",
     client_module.FIRST_MONTH_URL: "FIRST_MONTH",
     client_module.SLOT_URL: "SLOTS",
@@ -80,7 +79,6 @@ def poll_once(
     notifier: TelegramNotifier,
     state: PollState,
 ) -> None:
-    attach_client_failure_hooks(client, notifier, state)
     appointment_context = get_appointment_context(
         client,
         configured_application_id,
@@ -188,15 +186,6 @@ def get_appointment_context(
     return appointment_context
 
 
-def attach_client_failure_hooks(
-    client: VisaAppointmentClient,
-    notifier: TelegramNotifier,
-    state: PollState,
-) -> None:
-    client.on_call_failed = lambda failure: notify_client_call_failure(failure, notifier, state)
-    client.on_call_succeeded = state.failed_call_names.discard
-
-
 def notify_booking_attempt(
     client: VisaAppointmentClient,
     slot_request: SlotRequest,
@@ -290,21 +279,6 @@ def call_or_notify(
 
     state.failed_call_names.discard(call_name)
     return result
-
-
-def notify_client_call_failure(
-    failure: ClientCallFailure,
-    notifier: TelegramNotifier,
-    state: PollState,
-) -> None:
-    notify_call_failure(
-        failure.label,
-        failure.status_code,
-        failure.message,
-        failure.response_body,
-        notifier,
-        state.failed_call_names,
-    )
 
 
 def notify_call_failure(

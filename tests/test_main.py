@@ -3,7 +3,6 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 from embassy_bot import client as client_module
-from embassy_bot.client import ClientCallFailure
 from embassy_bot.state_store import PollState
 from embassy_bot.workflow import (
     build_appointment_context,
@@ -108,20 +107,6 @@ class NoFirstMonthClient(FakeClient):
     def get_first_available_month(self, request):
         self.calls.append("FIRST_MONTH")
         return {"present": False}
-
-
-class RefreshFailureClient(FakeClient):
-    def get_landing_page_details(self):
-        self.calls.append("GET_LANDING_PAGE_DETAILS")
-        self.on_call_failed(
-            ClientCallFailure(
-                label="REFRESH_TOKEN",
-                status_code=401,
-                message="HTTP 401",
-                response_body='{"message":"expired"}',
-            )
-        )
-        return landing_payload()
 
 
 class FakeNotifier:
@@ -382,26 +367,6 @@ class MainWorkflowTests(unittest.TestCase):
                 "Message: 500 Server Error\n"
                 'Body: {"message":"slot server error"}'
             ),
-        )
-
-    def test_poll_once_reports_refresh_token_failure_from_client_hook(self) -> None:
-        notifier = FakeNotifier()
-        state = PollState()
-
-        poll_once(RefreshFailureClient(), "application", None, notifier, state)
-        poll_once(RefreshFailureClient(), "application", None, notifier, state)
-
-        self.assertEqual(
-            notifier.messages,
-            [
-                (
-                    "US visa appointment polling call failed: REFRESH_TOKEN\n"
-                    "Status: 401\n"
-                    "Message: HTTP 401\n"
-                    'Body: {"message":"expired"}'
-                ),
-                "US visa appointment time available:\n- August 20, 2026 at 8:30 AM UTC",
-            ],
         )
 
     def test_build_appointment_context(self) -> None:

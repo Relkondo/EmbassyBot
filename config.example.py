@@ -8,10 +8,9 @@ CAPTCHA_KEY = ""
 ANCHOR_BASE_64 = ""
 RELOAD_BASE_64 = ""
 
-# These are updated automatically after login or token refresh. AUTHORIZATION_TOKEN
-# skips login while valid; REFRESH_TOKEN is used to renew it before CAPTCHA login.
+# Updated automatically after login. Used until it is within five minutes of
+# expiry, then the bot performs a full login and stores the new token.
 AUTHORIZATION_TOKEN = ""
-REFRESH_TOKEN = ""
 
 # Optional selector. Leave empty to use the most recently created application.
 APPLICATION_ID = ""

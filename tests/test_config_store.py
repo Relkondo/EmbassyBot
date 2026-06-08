@@ -16,13 +16,12 @@ class ConfigStoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            persist_tokens_to_config(str(config_path), "Bearer fresh", "refresh fresh")
+            persist_tokens_to_config(str(config_path), "Bearer fresh")
 
             self.assertEqual(
                 config_path.read_text(encoding="utf-8"),
                 'USERNAME = "user"\n'
-                "AUTHORIZATION_TOKEN = 'Bearer fresh'\n"
-                "REFRESH_TOKEN = 'refresh fresh'\n",
+                "AUTHORIZATION_TOKEN = 'Bearer fresh'\n",
             )
 
 

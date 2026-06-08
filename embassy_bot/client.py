@@ -23,7 +23,6 @@ TOKEN_EXPIRY_SKEW_SECONDS = 300
 SENSITIVE_RESPONSE_HEADERS = {"authorization", "cookie", "refreshtoken", "set-cookie"}
 
 LOGIN_URL = "https://www.usvisaappt.com/identity/user/login"
-REFRESH_TOKEN_URL = "https://www.usvisaappt.com/identity/user/refreshToken"
 APP_URL = "https://www.usvisaappt.com/visaapplicantui/"
 DEFAULT_SLOT_REFERER = (
     "https://www.usvisaappt.com/visaapplicantui/home/appointment/slot"
@@ -90,24 +89,6 @@ SLOT_HEADERS = {
     "Sec-Fetch-Dest": "empty",
     "Priority": "u=1, i",
 }
-
-REFRESH_HEADERS = {
-    "sec-ch-ua-platform": SEC_CH_UA_PLATFORM,
-    "sec-ch-ua": SEC_CH_UA,
-    "sec-ch-ua-mobile": SEC_CH_UA_MOBILE,
-    "User-Agent": USER_AGENT,
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en,fr;q=0.9",
-    "Content-Type": "application/json",
-    "Origin": ORIGIN,
-    "Referer": DEFAULT_SLOT_REFERER,
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Dest": "empty",
-    "Priority": "u=1, i",
-    "host": "www.usvisaappt.com",
-}
-
 
 @dataclass(frozen=True)
 class SlotRequest:
@@ -182,15 +163,6 @@ class SlotRequest:
             }
         ]
 
-
-@dataclass(frozen=True)
-class ClientCallFailure:
-    label: str
-    status_code: int | None
-    message: str
-    response_body: str | None = None
-
-
 class VisaAppointmentClient:
     def __init__(
         self,
@@ -201,15 +173,12 @@ class VisaAppointmentClient:
         captcha_key: str,
         timeout_seconds: int = 30,
         authorization_token: str | None = None,
-        refresh_token: str | None = None,
-        on_tokens_updated: Callable[[str, str | None], None] | None = None,
+        on_tokens_updated: Callable[[str], None] | None = None,
         session: requests.Session | None = None,
         anchor: str | None = None,
         reload: str | None = None,
         slot_referer: str | None = None,
         correlation_key: str | None = None,
-        on_call_failed: Callable[[ClientCallFailure], None] | None = None,
-        on_call_succeeded: Callable[[str], None] | None = None,
     ) -> None:
         self.username = username
         self.password = password
@@ -220,14 +189,11 @@ class VisaAppointmentClient:
         self.timeout_seconds = timeout_seconds
         self.session = session or requests.Session()
         self.authorization_token = self.normalize_authorization_token(authorization_token)
-        self.refresh_token = refresh_token or None
         self.on_tokens_updated = on_tokens_updated
         self.anchor = anchor
         self.reload = reload
         self.slot_referer = slot_referer or DEFAULT_SLOT_REFERER
         self.correlation_key = correlation_key or None
-        self.on_call_failed = on_call_failed
-        self.on_call_succeeded = on_call_succeeded
 
     def has_authorization_token(self) -> bool:
         return bool(self.authorization_token)
@@ -279,63 +245,21 @@ class VisaAppointmentClient:
         if not self.update_tokens_from_response(response):
             raise RuntimeError("Login succeeded but response did not include Authorization header")
 
-        self.report_call_succeeded("LOGIN")
         LOGGER.info("Logged in and stored authorization token")
-
-    def refresh_authorization_token(self) -> bool:
-        if not self.refresh_token:
-            return False
-
-        body = {
-            "refreshToken": self.refresh_token,
-            "username": self.username,
-        }
-        try:
-            response = self.session.post(
-                REFRESH_TOKEN_URL,
-                headers=self._refresh_headers(),
-                data=json.dumps(body, separators=(",", ":")),
-                timeout=self.timeout_seconds,
-            )
-        except requests.RequestException as exc:
-            LOGGER.exception("Refresh token request failed")
-            self.report_exception_failure("REFRESH_TOKEN", exc)
-            return False
-
-        if response.status_code >= 400:
-            self.log_api_failure("REFRESH_TOKEN", response)
-            self.report_response_failure("REFRESH_TOKEN", response)
-            return False
-
-        if not self.update_tokens_from_response(response):
-            message = "Refresh token request succeeded but returned no Authorization header"
-            LOGGER.warning(message)
-            self.report_response_failure("REFRESH_TOKEN", response, message)
-            return False
-
-        self.report_call_succeeded("REFRESH_TOKEN")
-        LOGGER.info("Refreshed authorization token")
-        return True
 
     def update_tokens_from_response(self, response: requests.Response) -> bool:
         authorization = self.normalize_authorization_token(response.headers.get("Authorization"))
-        refresh_token = response.headers.get("Refreshtoken")
         if not authorization:
             return False
 
-        changed = (
-            authorization != self.authorization_token
-            or (refresh_token is not None and refresh_token != self.refresh_token)
-        )
+        changed = authorization != self.authorization_token
         self.authorization_token = authorization
-        if refresh_token is not None:
-            self.refresh_token = refresh_token
 
         if changed and self.on_tokens_updated:
-            self.on_tokens_updated(self.authorization_token, self.refresh_token)
+            self.on_tokens_updated(self.authorization_token)
             request = getattr(response, "request", None)
             request_url = getattr(request, "url", "<unknown>")
-            LOGGER.info("Persisted authorization tokens returned by %s", request_url)
+            LOGGER.info("Persisted authorization token returned by %s", request_url)
         return True
 
     def warm_up_login_session(self) -> None:
@@ -438,14 +362,9 @@ class VisaAppointmentClient:
 
         response = send_request()
         if response.status_code in {401, 403}:
-            LOGGER.warning("%s request was unauthorized; attempting token refresh", label)
-            if self.refresh_authorization_token():
-                response = send_request()
-
-            if response.status_code in {401, 403}:
-                LOGGER.warning("%s request was still unauthorized; falling back to full login", label)
-                self.login()
-                response = send_request()
+            LOGGER.warning("%s request was unauthorized; falling back to full login", label)
+            self.login()
+            response = send_request()
 
         self.update_tokens_from_response(response)
         if response.status_code >= 400:
@@ -455,20 +374,13 @@ class VisaAppointmentClient:
 
     def ensure_authorized(self, label: str) -> None:
         if not self.has_authorization_token():
-            LOGGER.info("No configured authorization token; attempting refresh")
-            self.refresh_or_login()
+            LOGGER.info("No configured authorization token; performing full login")
+            self.login()
         elif self.is_authorization_token_expired():
-            LOGGER.info("Configured authorization token is expired or near expiry; attempting refresh")
-            self.refresh_or_login()
+            LOGGER.info("Configured authorization token is expired or near expiry; performing full login")
+            self.login()
         else:
             LOGGER.info("Using configured authorization token for %s request", label)
-
-    def refresh_or_login(self) -> None:
-        if self.refresh_authorization_token():
-            return
-
-        LOGGER.info("Falling back to full login")
-        self.login()
 
     def log_api_failure(self, label: str, response: requests.Response) -> None:
         safe_headers = {
@@ -491,47 +403,6 @@ class VisaAppointmentClient:
         LOGGER.error("%s session cookie names: %s", label, cookie_names)
         LOGGER.error("%s response headers: %s", label, safe_headers)
         LOGGER.error("%s response body snippet: %s", label, snippet)
-
-    def report_response_failure(
-        self,
-        label: str,
-        response: requests.Response,
-        message: str | None = None,
-    ) -> None:
-        if not self.on_call_failed:
-            return
-        response_body = getattr(response, "text", "")[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
-        self.on_call_failed(
-            ClientCallFailure(
-                label=label,
-                status_code=response.status_code,
-                message=message or f"HTTP {response.status_code}",
-                response_body=response_body or None,
-            )
-        )
-
-    def report_exception_failure(self, label: str, exc: requests.RequestException) -> None:
-        if not self.on_call_failed:
-            return
-        response = getattr(exc, "response", None)
-        status_code = getattr(response, "status_code", None)
-        response_body = getattr(response, "text", None)
-        if isinstance(response_body, str):
-            response_body = response_body[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
-        else:
-            response_body = None
-        self.on_call_failed(
-            ClientCallFailure(
-                label=label,
-                status_code=status_code if isinstance(status_code, int) else None,
-                message=str(exc) or exc.__class__.__name__,
-                response_body=response_body,
-            )
-        )
-
-    def report_call_succeeded(self, label: str) -> None:
-        if self.on_call_succeeded:
-            self.on_call_succeeded(label)
 
     def _authorized_post(self, url: str, body_json: dict[str, Any]) -> requests.Response:
         return self._authorized_request("POST", url, body_json)
@@ -565,12 +436,6 @@ class VisaAppointmentClient:
             "x-correlation-key": self.correlation_key or self.generate_correlation_key(),
         }
         return headers
-
-    def _refresh_headers(self) -> dict[str, str]:
-        return {
-            **REFRESH_HEADERS,
-            "Referer": self.slot_referer,
-        }
 
     def _post_first_month(self, request: SlotRequest) -> requests.Response:
         return self._authorized_post(FIRST_MONTH_URL, request.as_first_month_json())

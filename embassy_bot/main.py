@@ -47,11 +47,9 @@ def build_runtime(
         captcha_key=config.CAPTCHA_KEY,
         timeout_seconds=config.REQUEST_TIMEOUT_SECONDS,
         authorization_token="" if force_login else getattr(config, "AUTHORIZATION_TOKEN", ""),
-        refresh_token=getattr(config, "REFRESH_TOKEN", ""),
-        on_tokens_updated=lambda authorization, refresh: persist_tokens_to_config(
+        on_tokens_updated=lambda authorization: persist_tokens_to_config(
             config.__file__,
             authorization,
-            refresh,
         ),
         anchor=config.ANCHOR_BASE_64,
         reload=config.RELOAD_BASE_64,

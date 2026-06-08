@@ -25,7 +25,7 @@ Fill `config.py` before running. The most important fields are:
 - `USERNAME`, `PASSWORD`
 - `CAPSOLVER_API_KEY`, `CAPTCHA_URL`, `CAPTCHA_KEY`
 - `ANCHOR_BASE_64`, `RELOAD_BASE_64` if CapSolver needs anchor/reload payloads
-- `AUTHORIZATION_TOKEN`, `REFRESH_TOKEN`
+- `AUTHORIZATION_TOKEN`
 - `APPLICATION_ID` as an optional selector if multiple applications exist
 - `BOOKING_DATE_LIMIT`
 - `STATE_FILE`
@@ -55,9 +55,11 @@ service restart does not repeat availability messages. Relative paths are
 resolved next to `config.py`. It is written when the long-running process exits.
 
 If `AUTHORIZATION_TOKEN` is set, the bot uses it until it is within five minutes
-of expiry. When possible, it refreshes the token with `REFRESH_TOKEN` before
-falling back to full login and CAPTCHA. Fresh `AUTHORIZATION_TOKEN` and
-`REFRESH_TOKEN` values are persisted back to `config.py`.
+of expiry, which is roughly 55 minutes after login for the current site tokens.
+At that point it performs a full login and CAPTCHA again. If an authenticated
+call returns `401` or `403`, the bot also falls back to full login and retries
+that call once. Fresh `AUTHORIZATION_TOKEN` values are persisted back to
+`config.py`.
 
 ## EC2 / systemd
 
