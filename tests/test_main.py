@@ -1,6 +1,10 @@
 import unittest
 from datetime import date, datetime, timezone
+from http.client import RemoteDisconnected
 from types import SimpleNamespace
+
+import requests
+from urllib3.exceptions import ProtocolError
 
 from embassy_bot import client as client_module
 from embassy_bot.state_store import PollState
@@ -100,6 +104,17 @@ class FailingLoginClient(FakeClient):
             401,
             '{"message":"login failed"}',
             client_module.LOGIN_URL,
+        )
+
+
+class TransientFirstMonthClient(FakeClient):
+    def get_first_available_month(self, request):
+        self.calls.append("FIRST_MONTH")
+        raise requests.exceptions.ConnectionError(
+            ProtocolError(
+                "Connection aborted.",
+                RemoteDisconnected("Remote end closed connection without response"),
+            )
         )
 
 
@@ -368,6 +383,21 @@ class MainWorkflowTests(unittest.TestCase):
                 'Body: {"message":"slot server error"}'
             ),
         )
+
+    def test_poll_once_suppresses_remote_disconnected_notifications(self) -> None:
+        client = TransientFirstMonthClient()
+        notifier = FakeNotifier()
+
+        with self.assertRaises(requests.exceptions.ConnectionError):
+            poll_once(
+                client,
+                "application",
+                None,
+                notifier,
+                PollState(),
+            )
+
+        self.assertEqual(notifier.messages, [])
 
     def test_build_appointment_context(self) -> None:
         context = build_appointment_context(landing_payload(), "application")

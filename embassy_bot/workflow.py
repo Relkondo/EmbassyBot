@@ -267,18 +267,37 @@ def call_or_notify(
     except Exception as exc:
         failed_call_name = infer_failed_call_name(call_name, exc)
         failure = extract_failure_details(exc)
-        notify_call_failure(
-            failed_call_name,
-            failure.status_code,
-            failure.message,
-            failure.response_body,
-            notifier,
-            state.failed_call_names,
-        )
+        if should_notify_call_failure(failure):
+            notify_call_failure(
+                failed_call_name,
+                failure.status_code,
+                failure.message,
+                failure.response_body,
+                notifier,
+                state.failed_call_names,
+            )
+        else:
+            LOGGER.warning(
+                "Suppressed Telegram notification for transient %s failure: %s",
+                failed_call_name,
+                failure.message,
+            )
         raise
 
     state.failed_call_names.discard(call_name)
     return result
+
+
+def should_notify_call_failure(failure: FailureDetails) -> bool:
+    if failure.status_code is not None:
+        return True
+
+    message = failure.message
+    return not (
+        "Connection aborted" in message
+        and "RemoteDisconnected" in message
+        and "Remote end closed connection without response" in message
+    )
 
 
 def notify_call_failure(
