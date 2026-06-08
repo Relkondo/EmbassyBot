@@ -6,3 +6,4 @@ venv/
 
 # Local credentials and notification targets.
 config.py
+embassy_bot_state.json

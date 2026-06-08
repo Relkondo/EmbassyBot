@@ -35,10 +35,6 @@ def find_available_dates(payload: Any, before_date: date) -> list[date]:
     return sorted(dates)
 
 
-def find_start_times(payload: Any) -> list[datetime]:
-    return [slot.start_time for slot in find_slot_times(payload)]
-
-
 def find_slot_times(payload: Any) -> list[SlotTime]:
     slots = {
         found
@@ -69,32 +65,6 @@ def _walk_dates(value: Any, key: str | None = None) -> Iterable[date]:
             yield parse_iso_date(match.group(1))
         except ValueError:
             continue
-
-
-def _walk_start_times(value: Any, key: str | None = None) -> Iterable[datetime]:
-    if isinstance(value, dict):
-        if "startTime" in value:
-            slot_status = value.get("slotStatus")
-            if slot_status in {None, "UNBOOKED"}:
-                yield from _walk_start_times(value["startTime"], "startTime")
-            return
-
-        for child_key, child_value in value.items():
-            yield from _walk_start_times(child_value, str(child_key))
-        return
-
-    if isinstance(value, list):
-        for item in value:
-            yield from _walk_start_times(item, key)
-        return
-
-    if key != "startTime" or not isinstance(value, str):
-        return
-
-    try:
-        yield parse_iso_datetime(value)
-    except ValueError:
-        return
 
 
 def _walk_slot_times(value: Any) -> Iterable[SlotTime]:

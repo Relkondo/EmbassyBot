@@ -28,6 +28,7 @@ Fill `config.py` before running. The most important fields are:
 - `AUTHORIZATION_TOKEN`, `REFRESH_TOKEN`
 - `APPLICATION_ID` as an optional selector if multiple applications exist
 - `BOOKING_DATE_LIMIT`
+- `STATE_FILE`
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
 After authentication, the bot calls GET_LANDING_PAGE_DETAILS and extracts the
@@ -45,6 +46,10 @@ appointment start times to Telegram.
 When set, any GET_TIME slot strictly before that date is booked with the
 appointmentId from GET_LANDING_PAGE_DETAILS, and the Telegram message reports
 the booked time.
+
+`STATE_FILE` stores appointment datetimes that were already announced, so a
+service restart does not repeat availability messages. Relative paths are
+resolved next to `config.py`. It is written when the long-running process exits.
 
 If `AUTHORIZATION_TOKEN` is set, the bot uses it until it is within five minutes
 of expiry. When possible, it refreshes the token with `REFRESH_TOKEN` before

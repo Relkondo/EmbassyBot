@@ -183,6 +183,14 @@ class SlotRequest:
         ]
 
 
+@dataclass(frozen=True)
+class ClientCallFailure:
+    label: str
+    status_code: int | None
+    message: str
+    response_body: str | None = None
+
+
 class VisaAppointmentClient:
     def __init__(
         self,
@@ -200,6 +208,8 @@ class VisaAppointmentClient:
         reload: str | None = None,
         slot_referer: str | None = None,
         correlation_key: str | None = None,
+        on_call_failed: Callable[[ClientCallFailure], None] | None = None,
+        on_call_succeeded: Callable[[str], None] | None = None,
     ) -> None:
         self.username = username
         self.password = password
@@ -216,6 +226,8 @@ class VisaAppointmentClient:
         self.reload = reload
         self.slot_referer = slot_referer or DEFAULT_SLOT_REFERER
         self.correlation_key = correlation_key or None
+        self.on_call_failed = on_call_failed
+        self.on_call_succeeded = on_call_succeeded
 
     def has_authorization_token(self) -> bool:
         return bool(self.authorization_token)
@@ -267,6 +279,7 @@ class VisaAppointmentClient:
         if not self.update_tokens_from_response(response):
             raise RuntimeError("Login succeeded but response did not include Authorization header")
 
+        self.report_call_succeeded("LOGIN")
         LOGGER.info("Logged in and stored authorization token")
 
     def refresh_authorization_token(self) -> bool:
@@ -284,18 +297,23 @@ class VisaAppointmentClient:
                 data=json.dumps(body, separators=(",", ":")),
                 timeout=self.timeout_seconds,
             )
-        except requests.RequestException:
+        except requests.RequestException as exc:
             LOGGER.exception("Refresh token request failed")
+            self.report_exception_failure("REFRESH_TOKEN", exc)
             return False
 
         if response.status_code >= 400:
             self.log_api_failure("REFRESH_TOKEN", response)
+            self.report_response_failure("REFRESH_TOKEN", response)
             return False
 
         if not self.update_tokens_from_response(response):
-            LOGGER.warning("Refresh token request succeeded but returned no Authorization header")
+            message = "Refresh token request succeeded but returned no Authorization header"
+            LOGGER.warning(message)
+            self.report_response_failure("REFRESH_TOKEN", response, message)
             return False
 
+        self.report_call_succeeded("REFRESH_TOKEN")
         LOGGER.info("Refreshed authorization token")
         return True
 
@@ -363,34 +381,16 @@ class VisaAppointmentClient:
         return ""
 
     def get_first_available_month(self, request: SlotRequest) -> Any:
-        self.ensure_authorized("FIRST_MONTH")
-
-        response = self._post_first_month(request)
-        if response.status_code in {401, 403}:
-            LOGGER.warning("FIRST_MONTH request was unauthorized; attempting token refresh")
-            self.refresh_or_login()
-            response = self._post_first_month(request)
-
-        self.update_tokens_from_response(response)
-        if response.status_code >= 400:
-            self.log_api_failure("FIRST_MONTH", response)
-        response.raise_for_status()
-        return response.json()
+        return self._request_json_with_auth(
+            "FIRST_MONTH",
+            lambda: self._post_first_month(request),
+        )
 
     def get_slot_dates(self, request: SlotRequest, from_date: str, to_date: str) -> Any:
-        self.ensure_authorized("SLOTS")
-
-        response = self._post_slots(request, from_date, to_date)
-        if response.status_code in {401, 403}:
-            LOGGER.warning("SLOTS request was unauthorized; attempting token refresh")
-            self.refresh_or_login()
-            response = self._post_slots(request, from_date, to_date)
-
-        self.update_tokens_from_response(response)
-        if response.status_code >= 400:
-            self.log_api_failure("SLOTS", response)
-        response.raise_for_status()
-        return response.json()
+        return self._request_json_with_auth(
+            "SLOTS",
+            lambda: self._post_slots(request, from_date, to_date),
+        )
 
     def get_slot_times(
         self,
@@ -399,34 +399,16 @@ class VisaAppointmentClient:
         to_date: str,
         slot_date: str,
     ) -> Any:
-        self.ensure_authorized("GET_TIME")
-
-        response = self._post_slot_times(request, from_date, to_date, slot_date)
-        if response.status_code in {401, 403}:
-            LOGGER.warning("GET_TIME request was unauthorized; attempting token refresh")
-            self.refresh_or_login()
-            response = self._post_slot_times(request, from_date, to_date, slot_date)
-
-        self.update_tokens_from_response(response)
-        if response.status_code >= 400:
-            self.log_api_failure("GET_TIME", response)
-        response.raise_for_status()
-        return response.json()
+        return self._request_json_with_auth(
+            "GET_TIME",
+            lambda: self._post_slot_times(request, from_date, to_date, slot_date),
+        )
 
     def get_landing_page_details(self) -> Any:
-        self.ensure_authorized("GET_LANDING_PAGE_DETAILS")
-
-        response = self._get_landing_page_details()
-        if response.status_code in {401, 403}:
-            LOGGER.warning("GET_LANDING_PAGE_DETAILS request was unauthorized; attempting token refresh")
-            self.refresh_or_login()
-            response = self._get_landing_page_details()
-
-        self.update_tokens_from_response(response)
-        if response.status_code >= 400:
-            self.log_api_failure("GET_LANDING_PAGE_DETAILS", response)
-        response.raise_for_status()
-        return response.json()
+        return self._request_json_with_auth(
+            "GET_LANDING_PAGE_DETAILS",
+            self._get_landing_page_details,
+        )
 
     def reschedule_appointment(
         self,
@@ -436,29 +418,33 @@ class VisaAppointmentClient:
         appointment_date: str,
         appointment_time: str,
     ) -> Any:
-        self.ensure_authorized("BOOKING")
-
-        response = self._put_reschedule(
-            request,
-            appointment_id,
-            slot_id,
-            appointment_date,
-            appointment_time,
-        )
-        if response.status_code in {401, 403}:
-            LOGGER.warning("BOOKING request was unauthorized; attempting token refresh")
-            self.refresh_or_login()
-            response = self._put_reschedule(
+        return self._request_json_with_auth(
+            "BOOKING",
+            lambda: self._put_reschedule(
                 request,
                 appointment_id,
                 slot_id,
                 appointment_date,
                 appointment_time,
-            )
+            ),
+        )
+
+    def _request_json_with_auth(
+        self,
+        label: str,
+        send_request: Callable[[], requests.Response],
+    ) -> Any:
+        self.ensure_authorized(label)
+
+        response = send_request()
+        if response.status_code in {401, 403}:
+            LOGGER.warning("%s request was unauthorized; attempting token refresh", label)
+            self.refresh_or_login()
+            response = send_request()
 
         self.update_tokens_from_response(response)
         if response.status_code >= 400:
-            self.log_api_failure("BOOKING", response)
+            self.log_api_failure(label, response)
         response.raise_for_status()
         return response.json()
 
@@ -500,6 +486,47 @@ class VisaAppointmentClient:
         LOGGER.error("%s session cookie names: %s", label, cookie_names)
         LOGGER.error("%s response headers: %s", label, safe_headers)
         LOGGER.error("%s response body snippet: %s", label, snippet)
+
+    def report_response_failure(
+        self,
+        label: str,
+        response: requests.Response,
+        message: str | None = None,
+    ) -> None:
+        if not self.on_call_failed:
+            return
+        response_body = getattr(response, "text", "")[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
+        self.on_call_failed(
+            ClientCallFailure(
+                label=label,
+                status_code=response.status_code,
+                message=message or f"HTTP {response.status_code}",
+                response_body=response_body or None,
+            )
+        )
+
+    def report_exception_failure(self, label: str, exc: requests.RequestException) -> None:
+        if not self.on_call_failed:
+            return
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        response_body = getattr(response, "text", None)
+        if isinstance(response_body, str):
+            response_body = response_body[:MAX_RESPONSE_SNIPPET_LENGTH].replace("\n", "\\n")
+        else:
+            response_body = None
+        self.on_call_failed(
+            ClientCallFailure(
+                label=label,
+                status_code=status_code if isinstance(status_code, int) else None,
+                message=str(exc) or exc.__class__.__name__,
+                response_body=response_body,
+            )
+        )
+
+    def report_call_succeeded(self, label: str) -> None:
+        if self.on_call_succeeded:
+            self.on_call_succeeded(label)
 
     def _authorized_post(self, url: str, body_json: dict[str, Any]) -> requests.Response:
         return self._authorized_request("POST", url, body_json)

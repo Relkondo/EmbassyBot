@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 import requests
-
-
-def format_slot_message(dates: list[date]) -> str:
-    rendered = ", ".join(day.isoformat() for day in dates)
-    plural = "appointment dates" if len(dates) != 1 else "appointment date"
-    return f"US visa {plural} available: {rendered}"
 
 
 def format_time_message(start_times: list[datetime]) -> str:

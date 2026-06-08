@@ -261,6 +261,8 @@ class ClientTests(unittest.TestCase):
 
     def test_refresh_failure_falls_back_to_full_login(self) -> None:
         saved_tokens = []
+        failures = []
+        successes = []
         session = FakeSession(
             [
                 FakeResponse(status_code=401),
@@ -284,6 +286,8 @@ class ClientTests(unittest.TestCase):
             authorization_token=fake_jwt(int(time.time()) + 3600),
             refresh_token="refresh expired",
             on_tokens_updated=lambda auth, refresh: saved_tokens.append((auth, refresh)),
+            on_call_failed=failures.append,
+            on_call_succeeded=successes.append,
             session=session,
         )
 
@@ -296,6 +300,9 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(session.requests[3]["json"]["captchaToken"], "captcha-1")
         self.assertEqual(session.requests[-1]["headers"]["Authorization"], "Bearer fresh")
         self.assertEqual(saved_tokens, [("Bearer fresh", "refresh fresh")])
+        self.assertEqual(failures[0].label, "REFRESH_TOKEN")
+        self.assertEqual(failures[0].status_code, 401)
+        self.assertIn("LOGIN", successes)
 
     def test_missing_authorization_token_refreshes_before_slots(self) -> None:
         session = FakeSession(

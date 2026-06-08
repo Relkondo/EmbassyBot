@@ -3,7 +3,9 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 from embassy_bot import client as client_module
-from embassy_bot.main import (
+from embassy_bot.client import ClientCallFailure
+from embassy_bot.state_store import PollState
+from embassy_bot.workflow import (
     build_appointment_context,
     parse_first_month_date,
     poll_once,
@@ -108,6 +110,20 @@ class NoFirstMonthClient(FakeClient):
         return {"present": False}
 
 
+class RefreshFailureClient(FakeClient):
+    def get_landing_page_details(self):
+        self.calls.append("GET_LANDING_PAGE_DETAILS")
+        self.on_call_failed(
+            ClientCallFailure(
+                label="REFRESH_TOKEN",
+                status_code=401,
+                message="HTTP 401",
+                response_body='{"message":"expired"}',
+            )
+        )
+        return landing_payload()
+
+
 class FakeNotifier:
     def __init__(self) -> None:
         self.messages = []
@@ -142,7 +158,7 @@ class MainWorkflowTests(unittest.TestCase):
         client = FakeClient()
         notifier = FakeNotifier()
 
-        poll_once(client, "application", None, notifier, set())
+        poll_once(client, "application", None, notifier, PollState())
 
         today = date.today().isoformat()
         self.assertEqual(
@@ -162,26 +178,26 @@ class MainWorkflowTests(unittest.TestCase):
 
     def test_poll_once_does_not_repeat_same_appointment_time(self) -> None:
         notifier = FakeNotifier()
-        announced_start_times = set()
+        state = PollState()
 
-        poll_once(FakeClient(), "application", None, notifier, announced_start_times)
-        poll_once(FakeClient(), "application", None, notifier, announced_start_times)
+        poll_once(FakeClient(), "application", None, notifier, state)
+        poll_once(FakeClient(), "application", None, notifier, state)
 
         self.assertEqual(
             notifier.messages,
             ["US visa appointment time available:\n- August 20, 2026 at 8:30 AM UTC"],
         )
         self.assertEqual(
-            announced_start_times,
+            state.announced_start_times,
             {datetime(2026, 8, 20, 8, 30, tzinfo=timezone.utc)},
         )
 
     def test_poll_once_notifies_when_appointment_time_stops_being_available(self) -> None:
         notifier = FakeNotifier()
-        announced_start_times = set()
+        state = PollState()
 
-        poll_once(FakeClient(), "application", None, notifier, announced_start_times)
-        poll_once(NoFirstMonthClient(), "application", None, notifier, announced_start_times)
+        poll_once(FakeClient(), "application", None, notifier, state)
+        poll_once(NoFirstMonthClient(), "application", None, notifier, state)
 
         self.assertEqual(
             notifier.messages,
@@ -193,7 +209,7 @@ class MainWorkflowTests(unittest.TestCase):
                 ),
             ],
         )
-        self.assertEqual(announced_start_times, set())
+        self.assertEqual(state.announced_start_times, set())
 
     def test_poll_once_books_slot_before_booking_limit(self) -> None:
         client = FakeClient()
@@ -204,7 +220,7 @@ class MainWorkflowTests(unittest.TestCase):
             "application",
             date(2026, 8, 21),
             notifier,
-            set(),
+            PollState(),
         )
 
         self.assertEqual(
@@ -241,7 +257,7 @@ class MainWorkflowTests(unittest.TestCase):
             "application",
             date(2026, 8, 21),
             notifier,
-            set(),
+            PollState(),
         )
 
         self.assertEqual(
@@ -264,7 +280,7 @@ class MainWorkflowTests(unittest.TestCase):
                 "application",
                 None,
                 notifier,
-                set(),
+                PollState(),
             )
 
         self.assertEqual(
@@ -289,7 +305,7 @@ class MainWorkflowTests(unittest.TestCase):
                 "application",
                 None,
                 notifier,
-                set(),
+                PollState(),
             )
 
         self.assertEqual(
@@ -306,7 +322,7 @@ class MainWorkflowTests(unittest.TestCase):
 
     def test_poll_once_suppresses_repeated_call_failures_until_success(self) -> None:
         notifier = FakeNotifier()
-        failed_call_names = set()
+        state = PollState()
 
         with self.assertRaises(FakeHttpError):
             poll_once(
@@ -314,8 +330,7 @@ class MainWorkflowTests(unittest.TestCase):
                 "application",
                 None,
                 notifier,
-                set(),
-                failed_call_names,
+                state,
             )
         with self.assertRaises(FakeHttpError):
             poll_once(
@@ -323,8 +338,7 @@ class MainWorkflowTests(unittest.TestCase):
                 "application",
                 None,
                 notifier,
-                set(),
-                failed_call_names,
+                state,
             )
 
         self.assertEqual(len(notifier.messages), 1)
@@ -334,8 +348,7 @@ class MainWorkflowTests(unittest.TestCase):
             "application",
             None,
             notifier,
-            set(),
-            failed_call_names,
+            state,
         )
         with self.assertRaises(FakeHttpError):
             poll_once(
@@ -343,8 +356,7 @@ class MainWorkflowTests(unittest.TestCase):
                 "application",
                 None,
                 notifier,
-                set(),
-                failed_call_names,
+                state,
             )
 
         self.assertEqual(len(notifier.messages), 3)
@@ -356,6 +368,26 @@ class MainWorkflowTests(unittest.TestCase):
                 "Message: 500 Server Error\n"
                 'Body: {"message":"slot server error"}'
             ),
+        )
+
+    def test_poll_once_reports_refresh_token_failure_from_client_hook(self) -> None:
+        notifier = FakeNotifier()
+        state = PollState()
+
+        poll_once(RefreshFailureClient(), "application", None, notifier, state)
+        poll_once(RefreshFailureClient(), "application", None, notifier, state)
+
+        self.assertEqual(
+            notifier.messages,
+            [
+                (
+                    "US visa appointment polling call failed: REFRESH_TOKEN\n"
+                    "Status: 401\n"
+                    "Message: HTTP 401\n"
+                    'Body: {"message":"expired"}'
+                ),
+                "US visa appointment time available:\n- August 20, 2026 at 8:30 AM UTC",
+            ],
         )
 
     def test_build_appointment_context(self) -> None:
