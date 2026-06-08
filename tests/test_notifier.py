@@ -7,6 +7,7 @@ from embassy_bot.notifier import (
     format_booking_message,
     format_call_failure_message,
     format_time_message,
+    format_time_unavailable_message,
 )
 
 
@@ -24,6 +25,29 @@ class NotifierTests(unittest.TestCase):
                 "- July 31, 2026 at 8:30 AM UTC\n"
                 "- July 31, 2026 at 9:00 AM UTC"
             ),
+        )
+
+    def test_format_time_message_deduplicates_start_times(self) -> None:
+        self.assertEqual(
+            format_time_message(
+                [
+                    datetime(2026, 8, 21, 8, 30, tzinfo=timezone.utc),
+                    datetime(2026, 8, 21, 8, 30, tzinfo=timezone.utc),
+                    datetime(2026, 8, 21, 8, 30, tzinfo=timezone.utc),
+                ]
+            ),
+            "US visa appointment time available:\n- August 21, 2026 at 8:30 AM UTC",
+        )
+
+    def test_format_time_unavailable_message(self) -> None:
+        self.assertEqual(
+            format_time_unavailable_message(
+                [
+                    datetime(2026, 8, 21, 8, 30, tzinfo=timezone.utc),
+                    datetime(2026, 8, 21, 8, 30, tzinfo=timezone.utc),
+                ]
+            ),
+            "US visa appointment time is no longer available:\n- August 21, 2026 at 8:30 AM UTC",
         )
 
     def test_format_booking_message(self) -> None:

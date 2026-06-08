@@ -12,9 +12,17 @@ def format_slot_message(dates: list[date]) -> str:
 
 
 def format_time_message(start_times: list[datetime]) -> str:
+    start_times = sorted(set(start_times))
     rendered = "\n".join(f"- {format_start_time(start_time)}" for start_time in start_times)
     plural = "appointment times" if len(start_times) != 1 else "appointment time"
     return f"US visa {plural} available:\n{rendered}"
+
+
+def format_time_unavailable_message(start_times: list[datetime]) -> str:
+    start_times = sorted(set(start_times))
+    rendered = "\n".join(f"- {format_start_time(start_time)}" for start_time in start_times)
+    plural = "appointment times are" if len(start_times) != 1 else "appointment time is"
+    return f"US visa {plural} no longer available:\n{rendered}"
 
 
 def format_booking_message(start_time: datetime, response_message: str | None = None) -> str:

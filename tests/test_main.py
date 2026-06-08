@@ -1,5 +1,5 @@
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 from embassy_bot import client as client_module
@@ -102,6 +102,12 @@ class FailingLoginClient(FakeClient):
         )
 
 
+class NoFirstMonthClient(FakeClient):
+    def get_first_available_month(self, request):
+        self.calls.append("FIRST_MONTH")
+        return {"present": False}
+
+
 class FakeNotifier:
     def __init__(self) -> None:
         self.messages = []
@@ -153,6 +159,41 @@ class MainWorkflowTests(unittest.TestCase):
             notifier.messages[0],
             "US visa appointment time available:\n- August 20, 2026 at 8:30 AM UTC",
         )
+
+    def test_poll_once_does_not_repeat_same_appointment_time(self) -> None:
+        notifier = FakeNotifier()
+        announced_start_times = set()
+
+        poll_once(FakeClient(), "application", None, notifier, announced_start_times)
+        poll_once(FakeClient(), "application", None, notifier, announced_start_times)
+
+        self.assertEqual(
+            notifier.messages,
+            ["US visa appointment time available:\n- August 20, 2026 at 8:30 AM UTC"],
+        )
+        self.assertEqual(
+            announced_start_times,
+            {datetime(2026, 8, 20, 8, 30, tzinfo=timezone.utc)},
+        )
+
+    def test_poll_once_notifies_when_appointment_time_stops_being_available(self) -> None:
+        notifier = FakeNotifier()
+        announced_start_times = set()
+
+        poll_once(FakeClient(), "application", None, notifier, announced_start_times)
+        poll_once(NoFirstMonthClient(), "application", None, notifier, announced_start_times)
+
+        self.assertEqual(
+            notifier.messages,
+            [
+                "US visa appointment time available:\n- August 20, 2026 at 8:30 AM UTC",
+                (
+                    "US visa appointment time is no longer available:\n"
+                    "- August 20, 2026 at 8:30 AM UTC"
+                ),
+            ],
+        )
+        self.assertEqual(announced_start_times, set())
 
     def test_poll_once_books_slot_before_booking_limit(self) -> None:
         client = FakeClient()

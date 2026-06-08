@@ -22,6 +22,7 @@ from embassy_bot.notifier import (
     format_booking_message,
     format_call_failure_message,
     format_time_message,
+    format_time_unavailable_message,
 )
 from embassy_bot.slots import SlotTime, find_available_dates, find_slot_times
 
@@ -143,7 +144,7 @@ def poll_once(
     configured_application_id: str | None,
     booking_date_limit: date | None,
     notifier: TelegramNotifier,
-    notified_dates: set[date],
+    announced_start_times: set[datetime],
     failed_call_names: set[str] | None = None,
 ) -> None:
     if failed_call_names is None:
@@ -172,6 +173,7 @@ def poll_once(
     first_month_date = parse_first_month_date(first_month_payload)
     if not first_month_date:
         LOGGER.info("No first available month returned")
+        notify_availability_changes([], announced_start_times, notifier)
         return
 
     if first_month_date > alert_date_limit:
@@ -180,6 +182,7 @@ def poll_once(
             first_month_date.isoformat(),
             alert_date_limit.isoformat(),
         )
+        notify_availability_changes([], announced_start_times, notifier)
         return
 
     from_date, to_date = slot_window_for_first_month(first_month_date)
@@ -193,6 +196,7 @@ def poll_once(
     dates = find_available_dates(payload, date.max)
     if not dates:
         LOGGER.info("No appointment dates returned by SLOTS")
+        notify_availability_changes([], announced_start_times, notifier)
         return
 
     earliest_date = dates[0]
@@ -202,10 +206,7 @@ def poll_once(
             earliest_date.isoformat(),
             alert_date_limit.isoformat(),
         )
-        return
-
-    if earliest_date in notified_dates:
-        LOGGER.info("Already notified for earliest appointment date %s", earliest_date.isoformat())
+        notify_availability_changes([], announced_start_times, notifier)
         return
 
     today = date.today()
@@ -223,7 +224,7 @@ def poll_once(
     )
     LOGGER.info("GET_TIME response payload: %s", json.dumps(time_payload, default=str))
     slot_times = find_slot_times(time_payload)
-    start_times = [slot_time.start_time for slot_time in slot_times]
+    start_times = unique_start_times(slot_times)
 
     if start_times:
         booking_slot = first_bookable_slot(slot_times, booking_date_limit)
@@ -260,13 +261,39 @@ def poll_once(
                     booking_slot.start_time,
                     find_response_message(booking_payload),
                 )
+                notifier.send(message)
+                LOGGER.info("Found and notified for booking: %s", message)
         else:
-            message = format_time_message(start_times)
-        notifier.send(message)
-        notified_dates.add(earliest_date)
-        LOGGER.info("Found and notified for dates: %s", message)
+            notify_availability_changes(start_times, announced_start_times, notifier)
     else:
         LOGGER.info("No appointment start times returned by GET_TIME")
+        notify_availability_changes([], announced_start_times, notifier)
+
+
+def unique_start_times(slot_times: list[SlotTime]) -> list[datetime]:
+    return sorted({slot_time.start_time for slot_time in slot_times})
+
+
+def notify_availability_changes(
+    current_start_times: list[datetime],
+    announced_start_times: set[datetime],
+    notifier: TelegramNotifier,
+) -> None:
+    current = set(current_start_times)
+    stopped = sorted(announced_start_times - current)
+    if stopped:
+        message = format_time_unavailable_message(stopped)
+        notifier.send(message)
+        LOGGER.info("Notified for no longer available times: %s", message)
+
+    new = sorted(current - announced_start_times)
+    if new:
+        message = format_time_message(new)
+        notifier.send(message)
+        LOGGER.info("Notified for newly available times: %s", message)
+
+    announced_start_times.clear()
+    announced_start_times.update(current)
 
 
 def call_or_notify(
@@ -491,7 +518,7 @@ def run_once(force_login: bool = False) -> None:
 def run_forever() -> None:
     configure_logging()
     configured_application_id, booking_date_limit, client, notifier = build_runtime()
-    notified_dates: set[date] = set()
+    announced_start_times: set[datetime] = set()
     failed_call_names: set[str] = set()
 
     signal.signal(signal.SIGINT, _request_stop)
@@ -506,7 +533,7 @@ def run_forever() -> None:
                 configured_application_id,
                 booking_date_limit,
                 notifier,
-                notified_dates,
+                announced_start_times,
                 failed_call_names,
             )
         except Exception:
