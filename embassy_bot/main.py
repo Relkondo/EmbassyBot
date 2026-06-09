@@ -11,7 +11,7 @@ from threading import Event
 
 import config
 from embassy_bot.client import VisaAppointmentClient
-from embassy_bot.config_store import persist_tokens_to_config
+from embassy_bot.config_store import persist_booking_date_limit_to_config, persist_tokens_to_config
 from embassy_bot.config_values import load_optional_config_text
 from embassy_bot.notifier import TelegramNotifier
 from embassy_bot.state_store import DEFAULT_STATE_FILE, PollState, load_poll_state, save_poll_state
@@ -94,6 +94,10 @@ def run_once(force_login: bool = False) -> None:
     configured_application_id, booking_date_limit, _state_path, client, notifier = build_runtime(
         force_login=force_login
     )
+
+    def update_booking_date_limit(booked_date: date) -> None:
+        persist_booking_date_limit_to_config(config.__file__, booked_date)
+
     poll_once(
         client,
         configured_application_id,
@@ -101,6 +105,7 @@ def run_once(force_login: bool = False) -> None:
         notifier,
         PollState(),
         sleep_between_chained_calls,
+        update_booking_date_limit,
     )
 
 
@@ -120,6 +125,11 @@ def run_forever() -> None:
         jitter_seconds,
     )
 
+    def update_booking_date_limit(booked_date: date) -> None:
+        nonlocal booking_date_limit
+        booking_date_limit = booked_date
+        persist_booking_date_limit_to_config(config.__file__, booked_date)
+
     try:
         while not STOP_EVENT.is_set():
             wait_seconds = jittered_interval_seconds(base_interval_seconds, jitter_seconds)
@@ -131,6 +141,7 @@ def run_forever() -> None:
                     notifier,
                     state,
                     sleep_between_chained_calls,
+                    update_booking_date_limit,
                 )
             except Exception as exc:
                 if is_access_temporarily_restricted(exc):

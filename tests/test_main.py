@@ -90,6 +90,16 @@ class FakeHttpError(RuntimeError):
         )
 
 
+class AccessRestrictedBookingError(FakeHttpError):
+    def __init__(self) -> None:
+        super().__init__(
+            "401 Client Error",
+            401,
+            '{"msg":"Access temporarily restricted. Please try again later."}',
+            client_module.RESCHEDULE_URL,
+        )
+
+
 class FailingSlotsClient(FakeClient):
     def get_slot_dates(self, request, from_date, to_date):
         self.calls.append(("SLOTS", from_date, to_date))
@@ -268,6 +278,7 @@ class MainWorkflowTests(unittest.TestCase):
         client = FakeClient()
         notifier = FakeNotifier()
         state = PollState()
+        updated_booking_limits = []
 
         poll_once(
             client,
@@ -275,6 +286,7 @@ class MainWorkflowTests(unittest.TestCase):
             date(2026, 8, 21),
             notifier,
             state,
+            on_booking_succeeded=updated_booking_limits.append,
         )
 
         self.assertEqual(
@@ -303,6 +315,7 @@ class MainWorkflowTests(unittest.TestCase):
         )
         self.assertIsNone(state.appointment_context)
         self.assertEqual(state.announced_start_times, set())
+        self.assertEqual(updated_booking_limits, [date(2026, 8, 20)])
 
     def test_poll_once_notifies_when_booking_fails(self) -> None:
         client = FakeClient(booking_error=RuntimeError("booking exploded"))
@@ -323,6 +336,30 @@ class MainWorkflowTests(unittest.TestCase):
                 "Call: BOOKING\n"
                 "Status: unavailable\n"
                 "Message: booking exploded"
+            ),
+        )
+
+    def test_poll_once_reraises_access_restricted_booking_failure(self) -> None:
+        client = FakeClient(booking_error=AccessRestrictedBookingError())
+        notifier = FakeNotifier()
+
+        with self.assertRaises(AccessRestrictedBookingError):
+            poll_once(
+                client,
+                "application",
+                date(2026, 8, 21),
+                notifier,
+                PollState(),
+            )
+
+        self.assertEqual(
+            notifier.messages[0],
+            (
+                "US visa appointment booking failed: August 20, 2026 at 8:30 AM UTC\n"
+                "Call: BOOKING\n"
+                "Status: 401\n"
+                "Message: 401 Client Error\n"
+                'Body: {"msg":"Access temporarily restricted. Please try again later."}'
             ),
         )
 

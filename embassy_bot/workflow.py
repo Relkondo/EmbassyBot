@@ -79,6 +79,7 @@ def poll_once(
     notifier: TelegramNotifier,
     state: PollState,
     chain_delay: Callable[[], None] | None = None,
+    on_booking_succeeded: Callable[[date], None] | None = None,
 ) -> None:
     chain_delay = chain_delay or (lambda: None)
     appointment_context = get_appointment_context(
@@ -161,7 +162,15 @@ def poll_once(
         booking_slot = first_bookable_slot(slot_times, booking_date_limit)
         if booking_slot:
             chain_delay()
-            notify_booking_attempt(client, slot_request, appointment_id, booking_slot, notifier, state)
+            notify_booking_attempt(
+                client,
+                slot_request,
+                appointment_id,
+                booking_slot,
+                notifier,
+                state,
+                on_booking_succeeded,
+            )
         else:
             notify_availability_changes(start_times, state.announced_start_times, notifier)
     else:
@@ -198,6 +207,7 @@ def notify_booking_attempt(
     booking_slot: SlotTime,
     notifier: TelegramNotifier,
     state: PollState,
+    on_booking_succeeded: Callable[[date], None] | None = None,
 ) -> None:
     try:
         booking_payload = client.reschedule_appointment(
@@ -210,7 +220,10 @@ def notify_booking_attempt(
     except Exception as exc:
         LOGGER.exception("BOOKING attempt failed")
         failure = extract_failure_details(exc)
+        should_stop = is_access_temporarily_restricted(exc)
         if "BOOKING" in state.failed_call_names:
+            if should_stop:
+                raise
             return
         state.failed_call_names.add("BOOKING")
         notifier.send(
@@ -221,6 +234,8 @@ def notify_booking_attempt(
                 failure.response_body,
             )
         )
+        if should_stop:
+            raise
         return
 
     state.failed_call_names.discard("BOOKING")
@@ -232,6 +247,8 @@ def notify_booking_attempt(
         find_response_message(booking_payload),
     )
     notifier.send(message)
+    if on_booking_succeeded:
+        on_booking_succeeded(booking_slot.slot_date)
     LOGGER.info("Found and notified for booking: %s", message)
 
 
