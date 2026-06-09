@@ -68,25 +68,16 @@ the booked time.
 service restart does not repeat availability messages. Relative paths are
 resolved next to `config.py`. It is written when the long-running process exits.
 
-Long-running polling waits `BASE_INTERVAL_SECONDS` plus or minus a random
-`JITTER_SECONDS` value between attempts. After a transient remote disconnect
-where the server closes the connection without a response, the bot suppresses
-Telegram notification and waits eight minutes before retrying. When a deeper
-availability chain is needed, it also waits a random one to four seconds between
-`FIRST_MONTH`, `SLOTS`, `GET_TIME`, and booking calls.
+The bot uses randomized delays between access attempts and calls to the website.
 
 If the login response says access is temporarily restricted, the bot exits
 instead of continuing to retry. The provided systemd service uses
 `Restart=on-failure`, so this intentional clean exit is not restarted
 automatically.
 
-If `AUTHORIZATION_TOKEN` is set, the bot schedules a full login around 53
-minutes after the token was issued, plus or minus three minutes. Before that
-scheduled login, it waits another random one to three minutes. After three
-successful full logins in the same process, it waits about one hour, plus up to
-five extra minutes, before the fourth scheduled login. If an authenticated call
-returns `401` or `403`, the bot still falls back to full login and retries that
-call once. Fresh `AUTHORIZATION_TOKEN` values are persisted back to `config.py`.
+If `AUTHORIZATION_TOKEN` is set, the bot uses it until a later randomized login
+renewal or an authentication failure. Fresh `AUTHORIZATION_TOKEN` values are
+persisted back to `config.py`.
 
 ## EC2 / systemd
 
