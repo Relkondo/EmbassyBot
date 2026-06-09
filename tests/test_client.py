@@ -44,6 +44,8 @@ class FakeSession:
 
 class TestVisaAppointmentClient(VisaAppointmentClient):
     def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("sleep_func", lambda _seconds: None)
+        kwargs.setdefault("random_uniform_func", lambda start, _end: start)
         super().__init__(*args, **kwargs)
         self.captcha_requests = 0
 
@@ -64,9 +66,11 @@ def slot_request() -> SlotRequest:
     )
 
 
-def fake_jwt(exp: int) -> str:
+def fake_jwt(exp: int, iat: int | None = None) -> str:
     header = {"alg": "none"}
     payload = {"exp": exp, "token_use": "id"}
+    if iat is not None:
+        payload["iat"] = iat
 
     def encode(value) -> str:
         raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
@@ -193,6 +197,84 @@ class ClientTests(unittest.TestCase):
         self.assertIn("/visaapplicantui", session.requests[0]["url"])
         self.assertIn("/identity/user/login", session.requests[1]["url"])
         self.assertIn("/getFirstAvailableMonth", session.requests[2]["url"])
+
+    def test_scheduled_renewal_keeps_token_until_randomized_window(self) -> None:
+        now = 1_000_000
+        session = FakeSession([FakeResponse(payload={"present": False})])
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(now + 601, iat=now - 2999),
+            session=session,
+            time_func=lambda: now,
+        )
+
+        client.get_first_available_month(slot_request())
+
+        self.assertEqual(client.captcha_requests, 0)
+        self.assertEqual(len(session.requests), 1)
+        self.assertIn("/getFirstAvailableMonth", session.requests[0]["url"])
+
+    def test_scheduled_renewal_waits_before_full_login(self) -> None:
+        now = 1_000_000
+        sleeps = []
+        session = FakeSession(
+            [
+                FakeResponse(),
+                FakeResponse(headers={"Authorization": "Bearer fresh"}),
+                FakeResponse(payload={"present": False}),
+            ]
+        )
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(now + 600, iat=now - 3000),
+            session=session,
+            sleep_func=sleeps.append,
+            time_func=lambda: now,
+        )
+
+        client.get_first_available_month(slot_request())
+
+        self.assertEqual(sleeps, [60])
+        self.assertEqual(client.captcha_requests, 1)
+        self.assertIn("/visaapplicantui", session.requests[0]["url"])
+        self.assertIn("/identity/user/login", session.requests[1]["url"])
+        self.assertIn("/getFirstAvailableMonth", session.requests[2]["url"])
+
+    def test_fourth_scheduled_renewal_takes_long_pause_before_login(self) -> None:
+        now = 1_000_000
+        sleeps = []
+        session = FakeSession(
+            [
+                FakeResponse(),
+                FakeResponse(headers={"Authorization": "Bearer fresh"}),
+                FakeResponse(payload={"present": False}),
+            ]
+        )
+        client = TestVisaAppointmentClient(
+            username="user",
+            password="pass",
+            capsolver_api_key="api-key",
+            captcha_url="captcha-url",
+            captcha_key="captcha-key",
+            authorization_token=fake_jwt(now + 600, iat=now - 3000),
+            session=session,
+            sleep_func=sleeps.append,
+            time_func=lambda: now,
+        )
+        client.successful_login_count = 3
+
+        client.get_first_available_month(slot_request())
+
+        self.assertEqual(sleeps, [3600, 60])
+        self.assertEqual(client.captcha_requests, 1)
 
     def test_expired_stored_authorization_token_logs_in_before_slots(self) -> None:
         session = FakeSession(

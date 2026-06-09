@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import random
 import secrets
 import string
 import time
@@ -19,7 +20,14 @@ from embassy_bot.crypto import build_login_authorization
 
 LOGGER = logging.getLogger(__name__)
 MAX_RESPONSE_SNIPPET_LENGTH = 1000
-TOKEN_EXPIRY_SKEW_SECONDS = 300
+DEFAULT_TOKEN_LIFETIME_SECONDS = 60 * 60
+LOGIN_RENEWAL_BASE_AGE_SECONDS = 53 * 60
+LOGIN_RENEWAL_JITTER_SECONDS = 3 * 60
+PRE_LOGIN_DELAY_MIN_SECONDS = 60
+PRE_LOGIN_DELAY_MAX_SECONDS = 3 * 60
+LONG_LOGIN_PAUSE_AFTER_SUCCESSFUL_LOGINS = 3
+LONG_LOGIN_PAUSE_MIN_SECONDS = 60 * 60
+LONG_LOGIN_PAUSE_MAX_SECONDS = 65 * 60
 SENSITIVE_RESPONSE_HEADERS = {"authorization", "cookie", "refreshtoken", "set-cookie"}
 
 LOGIN_URL = "https://www.usvisaappt.com/identity/user/login"
@@ -178,6 +186,9 @@ class VisaAppointmentClient:
         anchor: str | None = None,
         reload: str | None = None,
         slot_referer: str | None = None,
+        sleep_func: Callable[[float], None] = time.sleep,
+        time_func: Callable[[], float] = time.time,
+        random_uniform_func: Callable[[float, float], float] = random.uniform,
     ) -> None:
         self.username = username
         self.password = password
@@ -192,6 +203,12 @@ class VisaAppointmentClient:
         self.anchor = anchor
         self.reload = reload
         self.slot_referer = slot_referer or DEFAULT_SLOT_REFERER
+        self.sleep_func = sleep_func
+        self.time_func = time_func
+        self.random_uniform_func = random_uniform_func
+        self.successful_login_count = 0
+        self.next_scheduled_login_at: float | None = None
+        self.schedule_next_login_from_token()
 
     def has_authorization_token(self) -> bool:
         return bool(self.authorization_token)
@@ -201,7 +218,40 @@ class VisaAppointmentClient:
         exp = claims.get("exp")
         if not isinstance(exp, int):
             return False
-        return exp <= int(time.time()) + TOKEN_EXPIRY_SKEW_SECONDS
+        return exp <= int(self.time_func())
+
+    def should_renew_authorization_token(self) -> bool:
+        if self.is_authorization_token_expired():
+            return True
+        return (
+            self.next_scheduled_login_at is not None
+            and self.time_func() >= self.next_scheduled_login_at
+        )
+
+    def schedule_next_login_from_token(self) -> None:
+        claims = self.decode_authorization_claims()
+        if not claims:
+            self.next_scheduled_login_at = None
+            return
+
+        issued_at = claims.get("iat") or claims.get("auth_time")
+        exp = claims.get("exp")
+        if not isinstance(issued_at, int):
+            if isinstance(exp, int):
+                issued_at = exp - DEFAULT_TOKEN_LIFETIME_SECONDS
+            else:
+                issued_at = int(self.time_func())
+
+        renewal_age = self.random_uniform_func(
+            LOGIN_RENEWAL_BASE_AGE_SECONDS - LOGIN_RENEWAL_JITTER_SECONDS,
+            LOGIN_RENEWAL_BASE_AGE_SECONDS + LOGIN_RENEWAL_JITTER_SECONDS,
+        )
+        scheduled_at = float(issued_at) + renewal_age
+        self.next_scheduled_login_at = scheduled_at
+        LOGGER.info(
+            "Scheduled next full login in %.1f seconds",
+            max(0.0, scheduled_at - self.time_func()),
+        )
 
     def decode_authorization_claims(self) -> dict[str, Any]:
         if not self.authorization_token:
@@ -243,6 +293,7 @@ class VisaAppointmentClient:
         if not self.update_tokens_from_response(response):
             raise RuntimeError("Login succeeded but response did not include Authorization header")
 
+        self.successful_login_count += 1
         LOGGER.info("Logged in and stored authorization token")
 
     def update_tokens_from_response(self, response: requests.Response) -> bool:
@@ -252,6 +303,8 @@ class VisaAppointmentClient:
 
         changed = authorization != self.authorization_token
         self.authorization_token = authorization
+        if changed:
+            self.schedule_next_login_from_token()
 
         if changed and self.on_tokens_updated:
             self.on_tokens_updated(self.authorization_token)
@@ -374,11 +427,35 @@ class VisaAppointmentClient:
         if not self.has_authorization_token():
             LOGGER.info("No configured authorization token; performing full login")
             self.login()
-        elif self.is_authorization_token_expired():
-            LOGGER.info("Configured authorization token is expired or near expiry; performing full login")
+        elif self.should_renew_authorization_token():
+            LOGGER.info("Configured authorization token reached scheduled renewal; performing full login")
+            self.sleep_before_scheduled_login()
             self.login()
         else:
             LOGGER.info("Using configured authorization token for %s request", label)
+
+    def sleep_before_scheduled_login(self) -> None:
+        if (
+            self.successful_login_count
+            and self.successful_login_count % LONG_LOGIN_PAUSE_AFTER_SUCCESSFUL_LOGINS == 0
+        ):
+            pause_seconds = self.random_uniform_func(
+                LONG_LOGIN_PAUSE_MIN_SECONDS,
+                LONG_LOGIN_PAUSE_MAX_SECONDS,
+            )
+            LOGGER.info(
+                "Completed %s successful full logins; waiting %.1f seconds before next login",
+                self.successful_login_count,
+                pause_seconds,
+            )
+            self.sleep_func(pause_seconds)
+
+        delay_seconds = self.random_uniform_func(
+            PRE_LOGIN_DELAY_MIN_SECONDS,
+            PRE_LOGIN_DELAY_MAX_SECONDS,
+        )
+        LOGGER.info("Waiting %.1f seconds before full login", delay_seconds)
+        self.sleep_func(delay_seconds)
 
     def log_api_failure(self, label: str, response: requests.Response) -> None:
         safe_headers = {
